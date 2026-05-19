@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: aovduy
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    healthCheckPath: /
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: BANK_NAME
+        sync: false
+      - key: BANK_NUMBER
+        sync: false
+      - key: SEPAY_TOKEN
+        sync: false
