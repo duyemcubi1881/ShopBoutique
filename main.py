@@ -283,15 +283,23 @@ def _order_id_in_text(oid: str, text: str) -> bool:
 def _get_txn_date(txn: dict) -> str:
     return str(txn.get("transactionDate") or txn.get("transaction_date") or "")
 
-def _txn_timestamp(txn: dict) -> float:
+def _txn_timestamp(txn: dict, order_created: float = 0) -> float:
+    """Parse thoi gian giao dich — SePay co the gui gio VN hoac UTC."""
     s = _get_txn_date(txn)
     if not s:
         return time.time()
-    try:
-        dt = datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=VN_TZ)
-        return dt.timestamp()
-    except Exception:
+    candidates: list[float] = []
+    for tz in (VN_TZ, datetime.timezone.utc):
+        try:
+            dt = datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=tz)
+            candidates.append(dt.timestamp())
+        except Exception:
+            pass
+    if not candidates:
         return time.time()
+    if order_created > 0:
+        return min(candidates, key=lambda t: abs(t - order_created))
+    return candidates[0]
 
 def _txn_fingerprint(txn: dict) -> str:
     tid = str(txn.get("id") or "").strip()
@@ -307,9 +315,11 @@ def _is_incoming(txn: dict) -> bool:
     if t is not None:
         return str(t).lower() == "in"
     try:
-        return float(txn.get("amount_in") or 0) > 0
+        ain = float(txn.get("amount_in") or 0)
+        aout = float(txn.get("amount_out") or 0)
+        return ain > 0 and aout == 0
     except (TypeError, ValueError):
-        return False
+        return _get_txn_amount(txn) > 0
 
 def _pending_same_amount(amount: int) -> list[str]:
     return [
@@ -340,17 +350,24 @@ def _match_order(txn: dict, oid: str, order: dict) -> bool:
         log.warning("Ma don %s trong CK nhung thieu tien: %d < %d", oid, amount, order_amount)
         return False
 
-    # Dự phòng: đúng số tiền + đơn tạo trước giao dịch (tối đa 30 phút)
+    # Dự phòng: đúng số tiền (SePay thường KHÔNG gửi mã NAP trong content — MSB/NAPAS)
     if amount != order_amount:
         return False
 
+    same = _pending_same_amount(amount)
+    # Chỉ 1 đơn chờ cùng số tiền → khớp luôn (an toàn)
+    if len(same) == 1 and oid == same[0]:
+        log.info(
+            "Khop AMOUNT (1 don cho) %s | %d | sepay_text=%.50s",
+            oid, order_amount, all_text,
+        )
+        return True
+
     order_created = order.get("created_at", 0)
-    txn_ts = _txn_timestamp(txn)
-    if txn_ts >= (order_created - 60) and (txn_ts - order_created) <= 1800:
-        same = _pending_same_amount(amount)
-        if oid in same:
-            log.info("Khop AMOUNT+TIME don %s | %d VND", oid, order_amount)
-            return True
+    txn_ts = _txn_timestamp(txn, order_created)
+    if oid in same and txn_ts >= (order_created - 300) and (txn_ts - order_created) <= 3600:
+        log.info("Khop AMOUNT+TIME don %s | %d VND", oid, order_amount)
+        return True
 
     return False
 
