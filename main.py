@@ -871,7 +871,7 @@ class BuyModal(discord.ui.Modal):
 
 # ══════════════════════════════════════════
 # UI — DUCDUY BOUTIQUE V2
-# Modern Cyber Nexus Style
+# FULL VIETNAMESE VERSION
 # ══════════════════════════════════════════
 
 def embed_nexus() -> discord.Embed:
@@ -882,52 +882,51 @@ def embed_nexus() -> discord.Embed:
         title="✦ DUCDUY BOUTIQUE",
         description=(
             "```ansi\n"
-            "\u001b[1;35m《 PREMIUM LICENSE MARKET 》\u001b[0m\n"
+            "\u001b[1;35m《 HỆ THỐNG LICENSE CAO CẤP 》\u001b[0m\n"
             "```\n"
-            "╭・⚡ **Instant Delivery**\n"
-            "├・💳 **Auto Deposit System**\n"
-            "├・🔐 **Private Key Access**\n"
-            "╰・🛰️ **Realtime API Connected**\n\n"
+
+            "╭・⚡ **Giao Key Tự Động**\n"
+            "├・💳 **Nạp Tiền Siêu Nhanh**\n"
+            "├・🔐 **Key Riêng Tư Bảo Mật**\n"
+            "╰・🛰️ **Hệ Thống Hoạt Động 24/7**\n\n"
 
             "## 🎯 LEGIT DRAG\n"
             f"> {ld['tagline']}\n"
-            f"> 🌐 `{API_LEGIT_BASE.replace('https://', '')}`\n"
-            f"> 💸 From **{_fmt_vnd(_min_price('legit_drag'))}**\n\n"
+            f"> 💸 Từ **{_fmt_vnd(_min_price('legit_drag'))}**\n\n"
 
             "## 🔫 AIMBOT HEAD\n"
             f"> {ah['tagline']}\n"
-            f"> 🌐 `{API_AIMBOT_BASE.replace('https://', '')}`\n"
-            f"> 💸 From **{_fmt_vnd(_min_price('aimbot_head'))}**"
+            f"> 💸 Từ **{_fmt_vnd(_min_price('aimbot_head'))}**"
         ),
         color=C_NEXUS,
     )
 
     e.add_field(
-        name="🛒 Purchase Flow",
+        name="🛒 Quy trình mua",
         value=(
             "```yaml\n"
-            "Deposit Balance\n"
-            "Select Product\n"
-            "Choose Package\n"
-            "Receive Key Instantly\n"
+            "Nạp tiền vào ví\n"
+            "Chọn sản phẩm\n"
+            "Chọn gói license\n"
+            "Nhận key tự động\n"
             "```"
         ),
         inline=True,
     )
 
     e.add_field(
-        name="📡 Support",
+        name="📡 Hỗ trợ",
         value=f"```fix\n{SUPPORT_TEXT}\n```",
         inline=True,
     )
 
     e.add_field(
-        name="✨ Features",
+        name="✨ Ưu điểm",
         value=(
-            "• Instant Key Delivery\n"
-            "• Stable Private API\n"
-            "• Fast Wallet System\n"
-            "• Premium Support"
+            "• Giao key ngay lập tức\n"
+            "• Hệ thống ổn định\n"
+            "• Nạp ví tự động\n"
+            "• Hỗ trợ nhanh chóng"
         ),
         inline=False,
     )
@@ -942,7 +941,7 @@ def embed_nexus() -> discord.Embed:
         e.set_image(url=SHOP_THUMBNAIL)
 
     e.set_footer(
-        text="DUCDUY BOUTIQUE • PREMIUM ACCESS PANEL",
+        text="DUCDUY BOUTIQUE • HỆ THỐNG LICENSE",
         icon_url=bot.user.display_avatar.url if bot.user else None,
     )
 
@@ -961,27 +960,24 @@ def embed_vault(product_key: str) -> discord.Embed:
         )
 
     e = discord.Embed(
-        title=f"{pv['emoji']} {pv['label'].upper()} VAULT",
+        title=f"{pv['emoji']} KHO LICENSE {pv['label'].upper()}",
         description=(
             f"```ansi\n"
             f"\u001b[1;36m{pv['tagline']}\u001b[0m\n"
             f"```\n"
 
-            f"🌐 **Node**\n"
-            f"`{_api_base(product_key)}`\n\n"
-
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"{chr(10).join(package_lines)}\n"
             f"━━━━━━━━━━━━━━━━━━━\n\n"
 
-            f"⚡ Select package below to continue purchase."
+            f"⚡ Chọn gói bên dưới để tiếp tục mua."
         ),
         color=pv["accent"],
     )
 
     e.add_field(
-        name="🔐 Delivery",
-        value="Key sent automatically to your DM.",
+        name="🔐 Hệ thống giao key",
+        value="Key sẽ được gửi tự động qua tin nhắn riêng.",
         inline=False,
     )
 
@@ -994,30 +990,30 @@ def embed_vault(product_key: str) -> discord.Embed:
 
 def embed_guide() -> discord.Embed:
     e = discord.Embed(
-        title="📡 NEXUS GUIDE",
+        title="📡 HƯỚNG DẪN SỬ DỤNG",
         description=(
             "```yaml\n"
-            "1. Open Product Vault\n"
-            "2. Select License Package\n"
-            "3. Deposit Wallet Balance\n"
-            "4. Auto Generate Key\n"
-            "5. Receive Key In DM\n"
+            "1. Chọn sản phẩm cần mua\n"
+            "2. Chọn gói license\n"
+            "3. Nạp tiền vào ví\n"
+            "4. Hệ thống tự tạo key\n"
+            "5. Nhận key qua DM\n"
             "```\n"
 
-            "⚠️ **IMPORTANT**\n"
-            "> Transfer exact amount\n"
-            "> Include correct NAP code\n"
-            "> Wrong transfer info = no auto add"
+            "⚠️ **LƯU Ý QUAN TRỌNG**\n"
+            "> Chuyển đúng số tiền\n"
+            "> Ghi đúng mã NAP\n"
+            "> Sai nội dung sẽ không cộng tự động"
         ),
         color=C_NEXUS,
     )
 
     e.add_field(
-        name="💳 Deposit System",
+        name="💳 Hệ thống nạp tiền",
         value=(
-            "• VietQR Auto Payment\n"
-            "• Instant Balance Update\n"
-            "• 24/7 Processing"
+            "• VietQR tự động\n"
+            "• Cộng tiền tức thì\n"
+            "• Hoạt động 24/7"
         ),
         inline=False,
     )
@@ -1044,7 +1040,7 @@ class PackageSelect(discord.ui.Select):
             )
 
         super().__init__(
-            placeholder="⚡ Select License Package...",
+            placeholder="⚡ Chọn gói license...",
             min_values=1,
             max_values=1,
             options=options,
@@ -1068,7 +1064,7 @@ class VaultView(discord.ui.View):
         self.add_item(PackageSelect(product_key))
 
     @discord.ui.button(
-        label="Close Vault",
+        label="Thoát",
         emoji="⬅️",
         style=discord.ButtonStyle.secondary,
         row=1
@@ -1077,7 +1073,7 @@ class VaultView(discord.ui.View):
         await interaction.response.edit_message(
             content=(
                 "```ansi\n"
-                "\u001b[1;31mVault Closed Successfully\u001b[0m\n"
+                "\u001b[1;31mĐã đóng kho license\u001b[0m\n"
                 "```"
             ),
             embed=None,
@@ -1118,7 +1114,7 @@ class NexusHubView(discord.ui.View):
         )
 
     @discord.ui.button(
-        label="Deposit",
+        label="Nạp ví",
         emoji="💳",
         style=discord.ButtonStyle.primary,
         custom_id="nexus_wallet",
@@ -1130,7 +1126,7 @@ class NexusHubView(discord.ui.View):
         )
 
     @discord.ui.button(
-        label="Balance",
+        label="Số dư",
         emoji="✨",
         style=discord.ButtonStyle.secondary,
         custom_id="nexus_balance",
@@ -1140,7 +1136,7 @@ class NexusHubView(discord.ui.View):
         bal = get_balance(interaction.user.id)
 
         e = discord.Embed(
-            title="✨ NEXUS WALLET",
+            title="✨ VÍ CỦA BẠN",
             description=(
                 "```ansi\n"
                 f"\u001b[1;32m{_fmt_vnd(bal)}\u001b[0m\n"
@@ -1149,7 +1145,7 @@ class NexusHubView(discord.ui.View):
             color=C_NEXUS,
         )
 
-        e.set_footer(text="Realtime Wallet Balance")
+        e.set_footer(text="Số dư được cập nhật theo thời gian thực")
 
         await interaction.response.send_message(
             embed=e,
@@ -1157,7 +1153,7 @@ class NexusHubView(discord.ui.View):
         )
 
     @discord.ui.button(
-        label="Guide",
+        label="Hướng dẫn",
         emoji="📡",
         style=discord.ButtonStyle.secondary,
         custom_id="nexus_guide",
@@ -1168,7 +1164,6 @@ class NexusHubView(discord.ui.View):
             embed=embed_guide(),
             ephemeral=True,
         )
-
 # ══════════════════════════════════════════
 # LENH
 # ══════════════════════════════════════════
