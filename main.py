@@ -339,15 +339,18 @@ def _txn_fingerprint(txn: dict) -> str:
     return "fp:" + _get_txn_date(txn) + "|" + str(_get_txn_amount(txn)) + "|" + _get_txn_text(txn)[:80]
 
 def _is_incoming(txn: dict) -> bool:
+    """SePay list API thường không có transferType — dùng amount_in."""
     t = txn.get("transferType")
-    if t is not None:
-        return str(t).lower() == "in"
+    if t is not None and str(t).lower() == "out":
+        return False
+    if t is not None and str(t).lower() == "in":
+        return True
     try:
-        ain = float(txn.get("amount_in") or 0)
-        aout = float(txn.get("amount_out") or 0)
-        return ain > 0 and aout == 0
+        if float(txn.get("amount_in") or 0) > 0:
+            return True
     except (TypeError, ValueError):
-        return _get_txn_amount(txn) > 0
+        pass
+    return _get_txn_amount(txn) > 0
 
 def _pending_same_amount(amount: int) -> list[str]:
     return [
@@ -356,48 +359,16 @@ def _pending_same_amount(amount: int) -> list[str]:
         if not o.get("paid") and o.get("amount") == amount and not _order_expired(o)
     ]
 
-def _match_order(txn: dict, oid: str, order: dict) -> bool:
-    if order.get("paid") or _order_expired(order):
-        return False
-    if not _is_incoming(txn):
-        return False
-
-    amount       = _get_txn_amount(txn)
-    order_amount = order["amount"]
-    if amount <= 0:
-        return False
-
-    all_text     = _get_txn_text(txn)
-    txn_date_str = _get_txn_date(txn)
-
-    # Ưu tiên: mã đơn trong nội dung CK (fuzzy) + đủ số tiền
-    if _order_id_in_text(oid, all_text):
-        if amount >= order_amount:
-            log.info("Khop MA DON %s | amount %d >= %d | text=%.60s", oid, amount, order_amount, all_text)
-            return True
-        log.warning("Ma don %s trong CK nhung thieu tien: %d < %d", oid, amount, order_amount)
-        return False
-
-    # Dự phòng: đúng số tiền (SePay thường KHÔNG gửi mã NAP trong content — MSB/NAPAS)
-    if amount != order_amount:
-        return False
-
-    same = _pending_same_amount(amount)
-    # Chỉ 1 đơn chờ cùng số tiền → khớp luôn (an toàn)
-    if len(same) == 1 and oid == same[0]:
-        log.info(
-            "Khop AMOUNT (1 don cho) %s | %d | sepay_text=%.50s",
-            oid, order_amount, all_text,
-        )
-        return True
-
-    order_created = order.get("created_at", 0)
-    txn_ts = _txn_timestamp(txn, order_created)
-    if oid in same and txn_ts >= (order_created - 300) and (txn_ts - order_created) <= 3600:
-        log.info("Khop AMOUNT+TIME don %s | %d VND", oid, order_amount)
-        return True
-
-    return False
+def _newest_pending_for_amount(amount: int) -> str | None:
+    """Đơn chờ cùng số tiền — lấy đơn mới nhất (MSB/SePay hay không gửi mã NAP)."""
+    cands = [
+        (oid, o.get("created_at", 0))
+        for oid, o in orders.items()
+        if not o.get("paid") and not _order_expired(o) and o.get("amount") == amount
+    ]
+    if not cands:
+        return None
+    return max(cands, key=lambda x: x[1])[0]
 
 def _find_order_for_txn(txn: dict) -> tuple[str | None, str | None]:
     """Tra don khop; tra (order_id, fingerprint)."""
@@ -405,9 +376,16 @@ def _find_order_for_txn(txn: dict) -> tuple[str | None, str | None]:
     if fp in processed_txns:
         return None, None
 
-    # Ưu tiên đơn có mã trong nội dung CK
-    text = _get_txn_text(txn)
+    if not _is_incoming(txn):
+        return None, None
+
     amount = _get_txn_amount(txn)
+    if amount <= 0:
+        return None, None
+
+    text = _get_txn_text(txn)
+
+    # 1) Mã NAP trong nội dung (nếu SePay có gửi)
     for oid, order in sorted(
         orders.items(),
         key=lambda x: x[1].get("created_at", 0),
@@ -415,13 +393,16 @@ def _find_order_for_txn(txn: dict) -> tuple[str | None, str | None]:
     ):
         if order.get("paid") or _order_expired(order):
             continue
-        if _order_id_in_text(oid, text) and amount >= order.get("amount", 0):
-            if _match_order(txn, oid, order):
-                return oid, fp
-
-    for oid, order in list(orders.items()):
-        if _match_order(txn, oid, order):
+        need = order.get("amount", 0)
+        if _order_id_in_text(oid, text) and amount >= need:
+            log.info("Khop MA DON %s | %d>=%d | %.50s", oid, amount, need, text)
             return oid, fp
+
+    # 2) Đúng số tiền → đơn pending mới nhất (fix MSB không gửi NAP trong API)
+    best = _newest_pending_for_amount(amount)
+    if best:
+        log.info("Khop AMOUNT don %s | %d | pending=%s | %.50s", best, amount, _pending_same_amount(amount), text)
+        return best, fp
 
     return None, None
 
@@ -447,13 +428,14 @@ async def _sepay_get(params: dict | None = None) -> tuple[int, dict]:
                     _sepay_auth_failed = True
                     log.error(
                         "SePay HTTP 401 — SEPAY_TOKEN sai hoac het han. "
-                        "Vao my.sepay.vn -> API -> tao token moi -> cap nhat Environment tren Render. Body: %s",
+                        "Vao my.sepay.vn -> API -> tao token moi -> cap nhat Render. Body: %s",
                         body[:200],
                     )
                     return 401, {}
                 if r.status != 200:
                     log.warning("SePay HTTP %s: %s", r.status, body[:200])
                     return r.status, {}
+                _sepay_auth_failed = False
                 try:
                     return r.status, json.loads(body)
                 except json.JSONDecodeError:
@@ -622,7 +604,10 @@ async def poll_sepay():
     ]
     if not pending:
         return
-    if not SEPAY_TOKEN or _sepay_auth_failed:
+    if not SEPAY_TOKEN:
+        return
+    if _sepay_auth_failed:
+        log.warning("Poll dung — SEPAY 401, can cap nhat SEPAY_TOKEN tren Render")
         return
 
     params = {"limit": 80}
@@ -871,36 +856,30 @@ class BuyModal(discord.ui.Modal):
 
 # ══════════════════════════════════════════
 # UI — DUCDUY BOUTIQUE V2
-# FULL VIETNAMESE VERSION
 # ══════════════════════════════════════════
 
 def embed_nexus() -> discord.Embed:
     ld = PRODUCTS["legit_drag"]
     ah = PRODUCTS["aimbot_head"]
-
     e = discord.Embed(
         title="✦ DUCDUY BOUTIQUE",
         description=(
             "```ansi\n"
             "\u001b[1;35m Shop ducduy boutique \u001b[0m\n"
             "```\n"
-
             "╭・⚡ **Giao Key Tự Động**\n"
             "├・💳 **Nạp Tiền Siêu Nhanh**\n"
             "├・🔐 **Key Riêng Tư Bảo Mật**\n"
             "╰・🛰️ **Hệ Thống Hoạt Động 24/7**\n\n"
-
             "## 🎯 LEGIT DRAG\n"
-            f"> {ld['tagline']}\n"
-            f"> 💸 Từ **{_fmt_vnd(_min_price('legit_drag'))}**\n\n"
-
+            "> " + ld["tagline"] + "\n"
+            "> 💸 Từ **" + _fmt_vnd(_min_price("legit_drag")) + "**\n\n"
             "## 🔫 AIMBOT HEAD\n"
-            f"> {ah['tagline']}\n"
-            f"> 💸 Từ **{_fmt_vnd(_min_price('aimbot_head'))}**"
+            "> " + ah["tagline"] + "\n"
+            "> 💸 Từ **" + _fmt_vnd(_min_price("aimbot_head")) + "**"
         ),
         color=C_NEXUS,
     )
-
     e.add_field(
         name="🛒 Quy trình mua",
         value=(
@@ -913,13 +892,11 @@ def embed_nexus() -> discord.Embed:
         ),
         inline=True,
     )
-
     e.add_field(
         name="📡 Hỗ trợ",
-        value=f"```fix\n{SUPPORT_TEXT}\n```",
+        value="```fix\n" + SUPPORT_TEXT + "\n```",
         inline=True,
     )
-
     e.add_field(
         name="✨ Ưu điểm",
         value=(
@@ -930,63 +907,39 @@ def embed_nexus() -> discord.Embed:
         ),
         inline=False,
     )
-
     if bot.user and bot.user.display_avatar:
-        e.set_author(
-            name="DUCDUY BOUTIQUE",
-            icon_url=bot.user.display_avatar.url,
-        )
-
+        e.set_author(name="DUCDUY BOUTIQUE", icon_url=bot.user.display_avatar.url)
     if SHOP_THUMBNAIL:
         e.set_image(url=SHOP_THUMBNAIL)
-
-    e.set_footer(
-        text="DUCDUY BOUTIQUE • HỆ THỐNG LICENSE",
-        icon_url=bot.user.display_avatar.url if bot.user else None,
-    )
-
+    foot_icon = bot.user.display_avatar.url if bot.user and bot.user.display_avatar else None
+    e.set_footer(text="DUCDUY BOUTIQUE • HỆ THỐNG LICENSE", icon_url=foot_icon)
     return e
-
 
 def embed_vault(product_key: str) -> discord.Embed:
     pv = PRODUCTS[product_key]
-
     package_lines = []
-
     for p in pv["packages"]:
         package_lines.append(
-            f"╭・⏳ **{p['duration']}**\n"
-            f"╰・💸 `{_fmt_vnd(p['price'])}`"
+            "╭・⏳ **" + p["duration"] + "**\n╰・💸 `" + _fmt_vnd(p["price"]) + "`"
         )
-
     e = discord.Embed(
-        title=f"{pv['emoji']} KHO LICENSE {pv['label'].upper()}",
+        title=pv["emoji"] + " KHO LICENSE " + pv["label"].upper(),
         description=(
-            f"```ansi\n"
-            f"\u001b[1;36m{pv['tagline']}\u001b[0m\n"
-            f"```\n"
-
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"{chr(10).join(package_lines)}\n"
-            f"━━━━━━━━━━━━━━━━━━━\n\n"
-
-            f"⚡ Chọn gói bên dưới để tiếp tục mua."
+            "```ansi\n\u001b[1;36m" + pv["tagline"] + "\u001b[0m\n```\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            + "\n".join(package_lines) + "\n"
+            "━━━━━━━━━━━━━━━━━━━\n\n"
+            "⚡ Chọn gói bên dưới để tiếp tục mua."
         ),
         color=pv["accent"],
     )
-
     e.add_field(
         name="🔐 Hệ thống giao key",
-        value="Key sẽ được gửi tự động qua tin nhắn riêng.",
+        value="Key gửi tự động qua DM · server `" + _api_base(product_key).replace("https://", "") + "`",
         inline=False,
     )
-
-    e.set_footer(
-        text=f"DUCDUY BOUTIQUE • {product_key.upper()}",
-    )
-
+    e.set_footer(text="DUCDUY BOUTIQUE • " + product_key.upper())
     return e
-
 
 def embed_guide() -> discord.Embed:
     e = discord.Embed(
@@ -999,171 +952,109 @@ def embed_guide() -> discord.Embed:
             "4. Hệ thống tự tạo key\n"
             "5. Nhận key qua DM\n"
             "```\n"
-
-            "⚠️ **LƯU Ý QUAN TRỌNG**\n"
+            "⚠️ **LƯU Ý**\n"
             "> Chuyển đúng số tiền\n"
-            "> Ghi đúng mã NAP\n"
-            "> Sai nội dung sẽ không cộng tự động"
+            "> Ghi đúng mã NAP (nếu có)\n"
+            "> MSB có thể không hiện mã — bot vẫn khớp theo số tiền"
         ),
         color=C_NEXUS,
     )
-
     e.add_field(
         name="💳 Hệ thống nạp tiền",
-        value=(
-            "• VietQR tự động\n"
-            "• Cộng tiền tức thì\n"
-            "• Hoạt động 24/7"
-        ),
+        value="• VietQR tự động\n• Cộng tiền tức thì\n• Hoạt động 24/7",
         inline=False,
     )
-
-    e.set_footer(text="DUCDUY BOUTIQUE • GUIDE PANEL")
-
+    e.set_footer(text="DUCDUY BOUTIQUE • GUIDE")
     return e
-
 
 class PackageSelect(discord.ui.Select):
     def __init__(self, product_key: str):
         pv = PRODUCTS[product_key]
-
-        options = []
-
-        for p in pv["packages"]:
-            options.append(
-                discord.SelectOption(
-                    label=f"{p['duration']} • {_fmt_vnd(p['price'])}",
-                    value=p["id"],
-                    description=p["name"][:95],
-                    emoji="⚡"
-                )
+        opts = [
+            discord.SelectOption(
+                label=p["duration"] + " • " + _fmt_vnd(p["price"]),
+                value=p["id"],
+                description=p["name"][:95],
+                emoji="⚡",
             )
-
+            for p in pv["packages"]
+        ]
         super().__init__(
             placeholder="⚡ Chọn gói license...",
             min_values=1,
             max_values=1,
-            options=options,
+            options=opts,
             row=0,
         )
-
         self.product_key = product_key
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(
-            BuyModal(self.values[0])
-        )
-
+        await interaction.response.send_modal(BuyModal(self.values[0]))
 
 class VaultView(discord.ui.View):
     def __init__(self, product_key: str):
         super().__init__(timeout=180)
-
         self.product_key = product_key
-
         self.add_item(PackageSelect(product_key))
 
-    @discord.ui.button(
-        label="Thoát",
-        emoji="⬅️",
-        style=discord.ButtonStyle.secondary,
-        row=1
-    )
+    @discord.ui.button(label="Thoát", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
     async def leave(self, interaction: discord.Interaction, _btn):
         await interaction.response.edit_message(
-            content=(
-                "```ansi\n"
-                "\u001b[1;31mĐã đóng kho license\u001b[0m\n"
-                "```"
-            ),
+            content="```ansi\n\u001b[1;31mĐã đóng kho license\u001b[0m\n```",
             embed=None,
             view=None,
         )
-
 
 class NexusHubView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="LEGIT DRAG",
-        emoji="🎯",
-        style=discord.ButtonStyle.success,
-        custom_id="nexus_vault_legit",
-        row=0,
+        label="LEGIT DRAG", emoji="🎯", style=discord.ButtonStyle.success,
+        custom_id="nexus_vault_legit", row=0,
     )
     async def open_legit(self, interaction: discord.Interaction, _btn):
         await interaction.response.send_message(
-            embed=embed_vault("legit_drag"),
-            view=VaultView("legit_drag"),
-            ephemeral=True,
+            embed=embed_vault("legit_drag"), view=VaultView("legit_drag"), ephemeral=True,
         )
 
     @discord.ui.button(
-        label="AIMBOT HEAD",
-        emoji="🔫",
-        style=discord.ButtonStyle.danger,
-        custom_id="nexus_vault_aimbot",
-        row=0,
+        label="AIMBOT HEAD", emoji="🔫", style=discord.ButtonStyle.danger,
+        custom_id="nexus_vault_aimbot", row=0,
     )
     async def open_aimbot(self, interaction: discord.Interaction, _btn):
         await interaction.response.send_message(
-            embed=embed_vault("aimbot_head"),
-            view=VaultView("aimbot_head"),
-            ephemeral=True,
+            embed=embed_vault("aimbot_head"), view=VaultView("aimbot_head"), ephemeral=True,
         )
 
     @discord.ui.button(
-        label="Nạp ví",
-        emoji="💳",
-        style=discord.ButtonStyle.primary,
-        custom_id="nexus_wallet",
-        row=1,
+        label="Nạp ví", emoji="💳", style=discord.ButtonStyle.primary,
+        custom_id="nexus_wallet", row=1,
     )
     async def wallet(self, interaction: discord.Interaction, _btn):
-        await interaction.response.send_modal(
-            DepositModal()
-        )
+        await interaction.response.send_modal(DepositModal())
 
     @discord.ui.button(
-        label="Số dư",
-        emoji="✨",
-        style=discord.ButtonStyle.secondary,
-        custom_id="nexus_balance",
-        row=1,
+        label="Số dư", emoji="✨", style=discord.ButtonStyle.secondary,
+        custom_id="nexus_balance", row=1,
     )
     async def balance(self, interaction: discord.Interaction, _btn):
         bal = get_balance(interaction.user.id)
-
         e = discord.Embed(
             title="✨ VÍ CỦA BẠN",
-            description=(
-                "```ansi\n"
-                f"\u001b[1;32m{_fmt_vnd(bal)}\u001b[0m\n"
-                "```"
-            ),
+            description="```ansi\n\u001b[1;32m" + _fmt_vnd(bal) + "\u001b[0m\n```",
             color=C_NEXUS,
         )
-
-        e.set_footer(text="Số dư được cập nhật theo thời gian thực")
-
-        await interaction.response.send_message(
-            embed=e,
-            ephemeral=True,
-        )
+        e.set_footer(text="Cập nhật theo thời gian thực")
+        await interaction.response.send_message(embed=e, ephemeral=True)
 
     @discord.ui.button(
-        label="Hướng dẫn",
-        emoji="📡",
-        style=discord.ButtonStyle.secondary,
-        custom_id="nexus_guide",
-        row=1,
+        label="Hướng dẫn", emoji="📡", style=discord.ButtonStyle.secondary,
+        custom_id="nexus_guide", row=1,
     )
     async def guide(self, interaction: discord.Interaction, _btn):
-        await interaction.response.send_message(
-            embed=embed_guide(),
-            ephemeral=True,
-        )
+        await interaction.response.send_message(embed=embed_guide(), ephemeral=True)
+
 # ══════════════════════════════════════════
 # LENH
 # ══════════════════════════════════════════
@@ -1276,6 +1167,14 @@ async def sepaycheck(ctx: commands.Context):
 
     e = discord.Embed(title="SePay Status", description="\n".join(lines), color=0x00BFFF)
     await ctx.send(embed=e)
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def sepayreset(ctx: commands.Context):
+    """Reset cờ 401 SePay sau khi đổi token."""
+    global _sepay_auth_failed
+    _sepay_auth_failed = False
+    await ctx.send("✅ Đã reset trạng thái SePay. Thử `!sepaycheck`.")
 
 @bot.command()
 @commands.has_permissions(administrator=True)
