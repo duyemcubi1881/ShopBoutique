@@ -129,7 +129,7 @@ PRODUCTS = {
     "legit_drag": {
         "label": "Legit Drag",
         "emoji": "🎯",
-        "tagline": "Precision · Smooth · Undetected lane",
+        "tagline": "Ghim Ngực - Kéo Tâm Dễ Dàng - Phù Hợp Chơi Chay",
         "server": "INOJ Cloud",
         "accent": C_LEGIT,
         "packages": [
@@ -143,7 +143,7 @@ PRODUCTS = {
     "aimbot_head": {
         "label": "Aimbot Head",
         "emoji": "🔫",
-        "tagline": "Head-tier · Fast lock · Pro lane",
+        "tagline": "Ghim Đầu Chặt - Không Lỗi Dame - Dễ Sử Dụng",
         "server": "AOV Duy Node",
         "accent": C_AIMBOT,
         "packages": [
