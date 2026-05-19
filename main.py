@@ -3,6 +3,7 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 from aiohttp import web
 import aiohttp
+import asyncio
 import os
 import re
 import random
@@ -50,6 +51,10 @@ PUBLIC_URL     = _clean_env(
     or "https://shopboutique.onrender.com"
 )
 WEBHOOK_PORT   = int(os.getenv("PORT") or os.getenv("WEBHOOK_PORT") or "8080")
+SHOP_COLOR     = 0x9B59B6
+SHOP_THUMBNAIL = _clean_env(os.getenv("SHOP_THUMBNAIL", ""))
+SUPPORT_TEXT   = _clean_env(os.getenv("SUPPORT_TEXT", "Mở ticket trên server hoặc DM admin"))
+DEPOSIT_MSG_TTL = int(os.getenv("DEPOSIT_MSG_TTL", "120"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -142,6 +147,9 @@ for _pk, _pv in PRODUCTS.items():
     for _pkg in _pv["packages"]:
         PKG[_pkg["id"]] = {**_pkg, "product_label": _pv["label"]}
 
+def _min_price(product_key: str) -> int:
+    return min(p["price"] for p in PRODUCTS[product_key]["packages"])
+
 # ══════════════════════════════════════════
 # HAM TIEN ICH
 # ══════════════════════════════════════════
@@ -189,7 +197,7 @@ def build_deposit_embed(amount: int, order_id: str) -> discord.Embed:
     e = discord.Embed(
         title="💳  Thông tin nạp tiền",
         description="Chuyển khoản **đúng** thông tin bên dưới — bot sẽ **tự động cộng tiền** khi nhận được.",
-        color=0xE91E8C,
+        color=SHOP_COLOR,
     )
     e.add_field(
         name="💵  Thông tin nạp",
@@ -510,6 +518,63 @@ async def confirm_payment(order_id: str, txn_fp: str | None = None):
     except Exception as e:
         log.warning("Khong DM duoc user %s: %s", uid, e)
 
+    await _replace_deposit_message(order_id, amount, bal)
+
+def _deposit_success_embed(amount: int, balance: int) -> discord.Embed:
+    e = discord.Embed(
+        title="✅  Nạp tiền thành công!",
+        description=(
+            "Hệ thống đã cộng tiền vào ví của bạn.\n\n"
+            "📩 **Vui lòng check DM** để xem chi tiết giao dịch.\n"
+            "🛒 Quay lại shop → chọn danh mục → mua key."
+        ),
+        color=0x2ECC71,
+    )
+    e.add_field(name="💵  Đã nạp", value="`{:,}` VNĐ".format(amount), inline=True)
+    e.add_field(name="💰  Số dư", value="`{:,}` VNĐ".format(balance), inline=True)
+    e.set_footer(text="Tin nhắn này sẽ tự xóa sau ~2 phút")
+    return e
+
+async def _replace_deposit_message(order_id: str, amount: int, balance: int):
+    order = orders.get(order_id)
+    if not order:
+        return
+    eph = order.get("ephemeral")
+    if not eph:
+        return
+    try:
+        webhook = discord.Webhook.partial(
+            int(eph["application_id"]),
+            eph["token"],
+            client=bot,
+        )
+        await webhook.edit_message(
+            int(eph["message_id"]),
+            embed=_deposit_success_embed(amount, balance),
+            attachments=[],
+        )
+        asyncio.create_task(
+            _delete_ephemeral_later(
+                eph["application_id"],
+                eph["token"],
+                eph["message_id"],
+                DEPOSIT_MSG_TTL,
+            )
+        )
+        log.info("Da thay tin nap thanh cong cho don %s", order_id)
+    except discord.NotFound:
+        log.debug("Tin nap ephemeral da mat — don %s", order_id)
+    except Exception as e:
+        log.warning("Khong sua duoc tin nap ephemeral %s: %s", order_id, e)
+
+async def _delete_ephemeral_later(app_id, token: str, message_id, delay: int):
+    await asyncio.sleep(delay)
+    try:
+        webhook = discord.Webhook.partial(int(app_id), token, client=bot)
+        await webhook.delete_message(int(message_id))
+    except Exception:
+        pass
+
 @tasks.loop(seconds=10)
 async def poll_sepay():
     pending = [
@@ -650,6 +715,16 @@ class DepositModal(discord.ui.Modal, title="💳  Nạp tiền"):
 
         embed = build_deposit_embed(amount, order_id)
         await interaction.response.send_message(embed=embed, ephemeral=True)
+        try:
+            msg = await interaction.original_response()
+            orders[order_id]["ephemeral"] = {
+                "application_id": interaction.application_id,
+                "token": interaction.token,
+                "message_id": msg.id,
+            }
+            _save_data()
+        except Exception as e:
+            log.warning("Khong luu ephemeral nap tien: %s", e)
 
 class BuyModal(discord.ui.Modal):
     qty_input = discord.ui.TextInput(
@@ -787,65 +862,125 @@ class ShopView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="💳  Nạp tiền", style=discord.ButtonStyle.green, row=0)
+    @discord.ui.select(
+        placeholder="📌  Chọn danh mục...",
+        min_values=1,
+        max_values=1,
+        options=[
+            discord.SelectOption(
+                label="Legit Drag",
+                value="legit_drag",
+                emoji="🎯",
+                description="Từ {:,}đ".format(_min_price("legit_drag")),
+            ),
+            discord.SelectOption(
+                label="Aimbot Head",
+                value="aimbot_head",
+                emoji="🔫",
+                description="Từ {:,}đ".format(_min_price("aimbot_head")),
+            ),
+        ],
+        row=0,
+    )
+    async def select_category(self, interaction: discord.Interaction, select: discord.ui.Select):
+        pk = select.values[0]
+        await interaction.response.send_message(
+            embed=embed_packages(pk),
+            view=PackageView(pk),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="💳  Nạp tiền", style=discord.ButtonStyle.green, row=1)
     async def btn_deposit(self, interaction: discord.Interaction, _btn):
         await interaction.response.send_modal(DepositModal())
 
-    @discord.ui.button(label="💰  Số dư", style=discord.ButtonStyle.blurple, row=0)
+    @discord.ui.button(label="💰  Số dư", style=discord.ButtonStyle.primary, row=1)
     async def btn_balance(self, interaction: discord.Interaction, _btn):
         bal = get_balance(interaction.user.id)
         e = discord.Embed(
-            title="💰  Số dư của bạn",
-            description="**" + "{:,}".format(bal) + " VNĐ**",
+            title="💰  Số dư ví",
+            description="Số dư hiện tại: **`{:,}` VNĐ**".format(bal),
             color=0x5865F2,
         )
+        e.set_footer(text="ducduy boutique")
         await interaction.response.send_message(embed=e, ephemeral=True)
 
-    @discord.ui.button(label="🛒  Mua Key", style=discord.ButtonStyle.red, row=0)
-    async def btn_shop(self, interaction: discord.Interaction, _btn):
-        await interaction.response.send_message(
-            embed=embed_category(), view=CategoryView(), ephemeral=True
-        )
+    @discord.ui.button(label="📖  Hướng dẫn", style=discord.ButtonStyle.secondary, row=1)
+    async def btn_guide(self, interaction: discord.Interaction, _btn):
+        await interaction.response.send_message(embed=embed_guide(), ephemeral=True)
 
 def embed_shop() -> discord.Embed:
-    e = discord.Embed(title="🛍️  Shop Key Tự Động — ducduy boutique", color=0xE91E8C)
-    e.description = (
-        "```\n"
-        "╔══════════════════════════════╗\n"
-        "    🔥  SAN PHAM DANG BAN\n"
-        "╠══════════════════════════════╣\n"
-        "  🎯 Legit Drag  |  🔫 Aimbot Head\n"
-        "  💰 Tu 3,000d   |  💰 Tu 5,000d\n"
-        "╠══════════════════════════════╣\n"
-        "  📦 Nhan key qua DM tuc thi\n"
-        "  ⚡ VietQR - cong tien tu dong\n"
-        "╠══════════════════════════════╣\n"
-        "    💬  SUPPORT\n"
-        "  📩 DM: @CubiShop\n"
-        "╚══════════════════════════════╝\n"
-        "```"
+    ld = PRODUCTS["legit_drag"]
+    ah = PRODUCTS["aimbot_head"]
+    bar = "═" * 32
+    e = discord.Embed(
+        title="🛒  ducduy boutique — Auto Buy",
+        description="**🔥  Danh mục đang bán**\n```" + bar + "```",
+        color=SHOP_COLOR,
     )
-    e.set_footer(text="ducduy boutique  •  Chon chuc nang ben duoi")
+    e.add_field(
+        name="➡️  " + ld["emoji"] + "  " + ld["label"],
+        value=(
+            "💰 **Giá:** từ `{:,}` VNĐ\n".format(_min_price("legit_drag"))
+            + "📦 **Kho:** ✅ Key tự động"
+        ),
+        inline=True,
+    )
+    e.add_field(
+        name="➡️  " + ah["emoji"] + "  " + ah["label"],
+        value=(
+            "💰 **Giá:** từ `{:,}` VNĐ\n".format(_min_price("aimbot_head"))
+            + "📦 **Kho:** ✅ Key tự động"
+        ),
+        inline=True,
+    )
+    e.add_field(
+        name="📞  Support",
+        value="📩  " + SUPPORT_TEXT,
+        inline=False,
+    )
+    e.set_footer(text="Vui lòng chọn danh mục bên dưới để tiếp tục")
+    if SHOP_THUMBNAIL:
+        e.set_thumbnail(url=SHOP_THUMBNAIL)
+    return e
+
+def embed_guide() -> discord.Embed:
+    e = discord.Embed(title="📖  Hướng dẫn sử dụng shop", color=SHOP_COLOR)
+    e.description = (
+        "**1.** Chọn **danh mục** (Legit Drag / Aimbot Head)\n"
+        "**2.** Ấn gói muốn mua → nhập số lượng\n"
+        "**3.** Nếu thiếu tiền → **💳 Nạp tiền** → quét QR\n"
+        "**4.** Sau khi nạp, bot **tự cộng tiền** và gửi DM\n"
+        "**5.** Mua key → nhận key qua **DM** ngay lập tức\n\n"
+        "⚠️ Chuyển khoản **đúng số tiền** và **đúng mã đơn** khi nạp."
+    )
+    e.set_footer(text="ducduy boutique")
     return e
 
 def embed_category() -> discord.Embed:
-    e = discord.Embed(title="🛒  Danh mục sản phẩm", color=0xFFD700)
+    e = discord.Embed(title="🛒  Danh mục sản phẩm", color=SHOP_COLOR)
     lines = []
-    for pv in PRODUCTS.values():
-        lines.append(pv["emoji"] + " **" + pv["label"] + "**")
-        for pkg in pv["packages"]:
-            lines.append("　└ " + pkg["name"] + " — **" + "{:,}".format(pkg["price"]) + "đ**")
-    e.description = "\n".join(lines) + "\n\n*Chọn sản phẩm trong menu bên dưới ↓*"
+    for key, pv in PRODUCTS.items():
+        lines.append(
+            pv["emoji"] + " **" + pv["label"] + "** — từ `{:,}`đ".format(_min_price(key))
+        )
+    e.description = "\n".join(lines) + "\n\n*Chọn danh mục trong menu shop chính ↓*"
     return e
 
 def embed_packages(product_key: str) -> discord.Embed:
     pv = PRODUCTS[product_key]
-    e  = discord.Embed(title=pv["emoji"] + "  " + pv["label"] + " — Chọn gói", color=0x00BFFF)
-    lines = [
-        "• **" + pkg["name"] + "** — " + "{:,}".format(pkg["price"]) + "đ"
-        for pkg in pv["packages"]
-    ]
-    e.description = "\n".join(lines) + "\n\n*Ấn nút bên dưới để mua ↓*"
+    e = discord.Embed(
+        title=pv["emoji"] + "  " + pv["label"] + " — Chọn gói",
+        description="```" + ("═" * 28) + "```",
+        color=SHOP_COLOR,
+    )
+    for pkg in pv["packages"]:
+        e.add_field(
+            name=pkg["name"],
+            value="💰 `{:,}`đ  •  ⏱️ {}".format(pkg["price"], pkg["duration"]),
+            inline=False,
+        )
+    e.set_footer(text="Ấn nút bên dưới để mua  •  ducduy boutique")
     return e
 
 # ══════════════════════════════════════════
