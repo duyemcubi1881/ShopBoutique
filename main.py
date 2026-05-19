@@ -870,117 +870,220 @@ class BuyModal(discord.ui.Modal):
                 log.error("DM key loi: %s", e)
 
 # ══════════════════════════════════════════
-# UI — BOUTIQUE NEXUS
+# UI — DUCDUY BOUTIQUE V2
+# Modern Cyber Nexus Style
 # ══════════════════════════════════════════
 
 def embed_nexus() -> discord.Embed:
     ld = PRODUCTS["legit_drag"]
     ah = PRODUCTS["aimbot_head"]
-    e = discord.Embed(color=C_PANEL)
-    e.description = (
-        "```ansi\n"
-        "\u001b[1;33m◈━━━━━━━━ BOUTIQUE NEXUS ━━━━━━━━◈\u001b[0m\n"
-        "```\n"
-        "*Trạm cấp license AOV · VietQR · giao key tức thì qua DM*\n\n"
-        "┌ **" + ld["emoji"] + " LEGIT LANE** ─────────────────\n"
-        "│ " + ld["tagline"] + "\n"
-        "│ Node `" + API_LEGIT_BASE.replace("https://", "") + "`\n"
-        "│ Từ **" + _fmt_vnd(_min_price("legit_drag")) + "**\n"
-        "└────────────────────────────\n\n"
-        "┌ **" + ah["emoji"] + " AIMBOT LANE** ────────────────\n"
-        "│ " + ah["tagline"] + "\n"
-        "│ Node `" + API_AIMBOT_BASE.replace("https://", "") + "`\n"
-        "│ Từ **" + _fmt_vnd(_min_price("aimbot_head")) + "**\n"
-        "└────────────────────────────"
-    )
-    e.add_field(
-        name="◎ Quy trình",
-        value="`Nạp` → `Chọn lane` → `Chọn gói` → `Key về DM`",
-        inline=False,
-    )
-    e.add_field(name="◎ Support", value=SUPPORT_TEXT, inline=False)
-    if bot.user and bot.user.display_avatar:
-        e.set_author(name="ducduy boutique", icon_url=bot.user.display_avatar.url)
-    else:
-        e.set_author(name="ducduy boutique")
-    e.set_footer(text="Chọn lane bên dưới · panel cố định")
-    if SHOP_THUMBNAIL:
-        e.set_image(url=SHOP_THUMBNAIL)
-    return e
 
-def embed_vault(product_key: str) -> discord.Embed:
-    pv = PRODUCTS[product_key]
-    lines = []
-    for p in pv["packages"]:
-        lines.append(
-            "▸ **" + p["duration"] + "** — `" + _fmt_vnd(p["price"]) + "`"
-        )
     e = discord.Embed(
-        title=pv["emoji"] + "  VAULT · " + pv["label"].upper(),
+        title="✦ DUCDUY BOUTIQUE",
         description=(
-            "*" + pv["tagline"] + "*\n"
-            "🛰️ `" + _api_base(product_key) + "`\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            + "\n".join(lines)
-            + "\n\n↓ **Chọn gói** trong menu để mua"
-        ),
-        color=pv["accent"],
-    )
-    e.set_footer(text="ducduy boutique · lane " + product_key)
-    return e
+            "```ansi\n"
+            "\u001b[1;35m《 PREMIUM LICENSE MARKET 》\u001b[0m\n"
+            "```\n"
+            "╭・⚡ **Instant Delivery**\n"
+            "├・💳 **Auto Deposit System**\n"
+            "├・🔐 **Private Key Access**\n"
+            "╰・🛰️ **Realtime API Connected**\n\n"
 
-def embed_guide() -> discord.Embed:
-    e = discord.Embed(
-        title="◎  Nexus Guide",
-        description=(
-            "**①** Ấn lane **Legit** hoặc **Aimbot**\n"
-            "**②** Chọn gói → nhập số lượng\n"
-            "**③** Bot trừ ví → **tự gọi server** tạo key\n"
-            "**④** Key gửi **DM** (mỗi loại server riêng)\n\n"
-            "**Nạp tiền:** `Nạp ví` → QR → auto cộng\n"
-            "⚠️ CK đúng **số tiền** + **mã NAP**"
+            "## 🎯 LEGIT DRAG\n"
+            f"> {ld['tagline']}\n"
+            f"> 🌐 `{API_LEGIT_BASE.replace('https://', '')}`\n"
+            f"> 💸 From **{_fmt_vnd(_min_price('legit_drag'))}**\n\n"
+
+            "## 🔫 AIMBOT HEAD\n"
+            f"> {ah['tagline']}\n"
+            f"> 🌐 `{API_AIMBOT_BASE.replace('https://', '')}`\n"
+            f"> 💸 From **{_fmt_vnd(_min_price('aimbot_head'))}**"
         ),
         color=C_NEXUS,
     )
+
+    e.add_field(
+        name="🛒 Purchase Flow",
+        value=(
+            "```yaml\n"
+            "Deposit Balance\n"
+            "Select Product\n"
+            "Choose Package\n"
+            "Receive Key Instantly\n"
+            "```"
+        ),
+        inline=True,
+    )
+
+    e.add_field(
+        name="📡 Support",
+        value=f"```fix\n{SUPPORT_TEXT}\n```",
+        inline=True,
+    )
+
+    e.add_field(
+        name="✨ Features",
+        value=(
+            "• Instant Key Delivery\n"
+            "• Stable Private API\n"
+            "• Fast Wallet System\n"
+            "• Premium Support"
+        ),
+        inline=False,
+    )
+
+    if bot.user and bot.user.display_avatar:
+        e.set_author(
+            name="DUCDUY BOUTIQUE",
+            icon_url=bot.user.display_avatar.url,
+        )
+
+    if SHOP_THUMBNAIL:
+        e.set_image(url=SHOP_THUMBNAIL)
+
+    e.set_footer(
+        text="DUCDUY BOUTIQUE • PREMIUM ACCESS PANEL",
+        icon_url=bot.user.display_avatar.url if bot.user else None,
+    )
+
     return e
+
+
+def embed_vault(product_key: str) -> discord.Embed:
+    pv = PRODUCTS[product_key]
+
+    package_lines = []
+
+    for p in pv["packages"]:
+        package_lines.append(
+            f"╭・⏳ **{p['duration']}**\n"
+            f"╰・💸 `{_fmt_vnd(p['price'])}`"
+        )
+
+    e = discord.Embed(
+        title=f"{pv['emoji']} {pv['label'].upper()} VAULT",
+        description=(
+            f"```ansi\n"
+            f"\u001b[1;36m{pv['tagline']}\u001b[0m\n"
+            f"```\n"
+
+            f"🌐 **Node**\n"
+            f"`{_api_base(product_key)}`\n\n"
+
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"{chr(10).join(package_lines)}\n"
+            f"━━━━━━━━━━━━━━━━━━━\n\n"
+
+            f"⚡ Select package below to continue purchase."
+        ),
+        color=pv["accent"],
+    )
+
+    e.add_field(
+        name="🔐 Delivery",
+        value="Key sent automatically to your DM.",
+        inline=False,
+    )
+
+    e.set_footer(
+        text=f"DUCDUY BOUTIQUE • {product_key.upper()}",
+    )
+
+    return e
+
+
+def embed_guide() -> discord.Embed:
+    e = discord.Embed(
+        title="📡 NEXUS GUIDE",
+        description=(
+            "```yaml\n"
+            "1. Open Product Vault\n"
+            "2. Select License Package\n"
+            "3. Deposit Wallet Balance\n"
+            "4. Auto Generate Key\n"
+            "5. Receive Key In DM\n"
+            "```\n"
+
+            "⚠️ **IMPORTANT**\n"
+            "> Transfer exact amount\n"
+            "> Include correct NAP code\n"
+            "> Wrong transfer info = no auto add"
+        ),
+        color=C_NEXUS,
+    )
+
+    e.add_field(
+        name="💳 Deposit System",
+        value=(
+            "• VietQR Auto Payment\n"
+            "• Instant Balance Update\n"
+            "• 24/7 Processing"
+        ),
+        inline=False,
+    )
+
+    e.set_footer(text="DUCDUY BOUTIQUE • GUIDE PANEL")
+
+    return e
+
 
 class PackageSelect(discord.ui.Select):
     def __init__(self, product_key: str):
         pv = PRODUCTS[product_key]
-        opts = []
+
+        options = []
+
         for p in pv["packages"]:
-            opts.append(
+            options.append(
                 discord.SelectOption(
-                    label=p["duration"] + " · " + _fmt_vnd(p["price"]),
+                    label=f"{p['duration']} • {_fmt_vnd(p['price'])}",
                     value=p["id"],
                     description=p["name"][:95],
+                    emoji="⚡"
                 )
             )
+
         super().__init__(
-            placeholder="⚡  Chọn gói license...",
+            placeholder="⚡ Select License Package...",
             min_values=1,
             max_values=1,
-            options=opts,
+            options=options,
             row=0,
         )
+
         self.product_key = product_key
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(BuyModal(self.values[0]))
+        await interaction.response.send_modal(
+            BuyModal(self.values[0])
+        )
+
 
 class VaultView(discord.ui.View):
     def __init__(self, product_key: str):
         super().__init__(timeout=180)
+
         self.product_key = product_key
+
         self.add_item(PackageSelect(product_key))
 
-    @discord.ui.button(label="←  Thoát vault", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(
+        label="Close Vault",
+        emoji="⬅️",
+        style=discord.ButtonStyle.secondary,
+        row=1
+    )
     async def leave(self, interaction: discord.Interaction, _btn):
         await interaction.response.edit_message(
-            content="◈ Quay lại **panel Nexus** trên kênh shop.",
+            content=(
+                "```ansi\n"
+                "\u001b[1;31mVault Closed Successfully\u001b[0m\n"
+                "```"
+            ),
             embed=None,
             view=None,
         )
+
 
 class NexusHubView(discord.ui.View):
     def __init__(self):
@@ -1015,17 +1118,19 @@ class NexusHubView(discord.ui.View):
         )
 
     @discord.ui.button(
-        label="Nạp ví",
+        label="Deposit",
         emoji="💳",
         style=discord.ButtonStyle.primary,
         custom_id="nexus_wallet",
         row=1,
     )
     async def wallet(self, interaction: discord.Interaction, _btn):
-        await interaction.response.send_modal(DepositModal())
+        await interaction.response.send_modal(
+            DepositModal()
+        )
 
     @discord.ui.button(
-        label="Số dư",
+        label="Balance",
         emoji="✨",
         style=discord.ButtonStyle.secondary,
         custom_id="nexus_balance",
@@ -1033,12 +1138,23 @@ class NexusHubView(discord.ui.View):
     )
     async def balance(self, interaction: discord.Interaction, _btn):
         bal = get_balance(interaction.user.id)
+
         e = discord.Embed(
-            title="✨  Ví Nexus",
-            description="```\n" + _fmt_vnd(bal) + "\n```",
+            title="✨ NEXUS WALLET",
+            description=(
+                "```ansi\n"
+                f"\u001b[1;32m{_fmt_vnd(bal)}\u001b[0m\n"
+                "```"
+            ),
             color=C_NEXUS,
         )
-        await interaction.response.send_message(embed=e, ephemeral=True)
+
+        e.set_footer(text="Realtime Wallet Balance")
+
+        await interaction.response.send_message(
+            embed=e,
+            ephemeral=True,
+        )
 
     @discord.ui.button(
         label="Guide",
@@ -1048,7 +1164,10 @@ class NexusHubView(discord.ui.View):
         row=1,
     )
     async def guide(self, interaction: discord.Interaction, _btn):
-        await interaction.response.send_message(embed=embed_guide(), ephemeral=True)
+        await interaction.response.send_message(
+            embed=embed_guide(),
+            ephemeral=True,
+        )
 
 # ══════════════════════════════════════════
 # LENH
