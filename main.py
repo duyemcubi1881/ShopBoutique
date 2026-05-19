@@ -170,6 +170,49 @@ def _api_base(product_key: str) -> str:
 def _fmt_vnd(n: int) -> str:
     return "{:,}".format(n) + "₫"
 
+HTTP_HEADERS = {
+    "User-Agent": "DucDuyBoutique-ShopBot/2.0",
+    "Accept": "application/json",
+}
+API_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=20)
+
+def _short_body(body: str, limit: int = 220) -> str:
+    t = re.sub(r"\s+", " ", (body or "")).strip()
+    if len(t) > limit:
+        return t[:limit] + "..."
+    return t
+
+def _is_cloudflare_html(body: str) -> bool:
+    b = (body or "").lower()
+    return "cloudflare" in b and ("cf-ray" in b or "error code" in b or "<!doctype html" in b)
+
+def _cf_ray_from_body(body: str) -> str:
+    m = re.search(r"Ray ID[:\s]*<?[^>]*>?([a-f0-9]{16})", body or "", re.I)
+    return m.group(1) if m else ""
+
+def _log_http_fail(label: str, url: str, status: int, body: str):
+    if _is_cloudflare_html(body):
+        ray = _cf_ray_from_body(body)
+        log.error(
+            "%s | %s | HTTP %s | CLOUDFLARE (Ray %s) — API dang ngu/qua tai. "
+            "Doi 30-60s hoac mo URL tren trinh duyet de danh thuc Render.",
+            label, url, status, ray or "?",
+        )
+    elif status in (502, 503, 520, 521, 522, 524):
+        log.error("%s | %s | HTTP %s | Server tam thoi loi: %s", label, url, status, _short_body(body))
+    else:
+        log.error("%s | %s | HTTP %s | %s", label, url, status, _short_body(body))
+
+async def _read_http(resp: aiohttp.ClientResponse) -> tuple[str, dict]:
+    body = await resp.text()
+    data: dict = {}
+    if body.strip().startswith("{"):
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            pass
+    return body, data
+
 # ══════════════════════════════════════════
 # HAM TIEN ICH
 # ══════════════════════════════════════════
@@ -435,32 +478,34 @@ async def _sepay_get(params: dict | None = None) -> tuple[int, dict]:
     if _sepay_auth_failed:
         return 401, {}
 
-    headers = {"Authorization": "Bearer " + SEPAY_TOKEN}
+    headers = {**HTTP_HEADERS, "Authorization": "Bearer " + SEPAY_TOKEN}
+    url = "https://my.sepay.vn/userapi/transactions/list"
     try:
-        async with aiohttp.ClientSession() as s:
+        async with aiohttp.ClientSession(headers=HTTP_HEADERS) as s:
             async with s.get(
-                "https://my.sepay.vn/userapi/transactions/list",
+                url,
                 headers=headers,
                 params=params or {"limit": 20},
-                timeout=aiohttp.ClientTimeout(total=12),
+                timeout=API_TIMEOUT,
             ) as r:
-                body = await r.text()
+                body, data = await _read_http(r)
                 if r.status == 401:
                     _sepay_auth_failed = True
-                    log.error(
-                        "SePay HTTP 401 — SEPAY_TOKEN sai hoac het han. "
-                        "Vao my.sepay.vn -> API -> tao token moi -> cap nhat Render. Body: %s",
-                        body[:200],
-                    )
+                    log.error("SePay 401 — kiem tra SEPAY_TOKEN tren Render. %s", _short_body(body))
                     return 401, {}
-                if r.status != 200:
-                    log.warning("SePay HTTP %s: %s", r.status, body[:200])
+                if r.status != 200 or _is_cloudflare_html(body):
+                    if _is_cloudflare_html(body):
+                        _log_http_fail("SePay", url, r.status, body)
+                    else:
+                        log.warning("SePay HTTP %s: %s", r.status, _short_body(body))
                     return r.status, {}
                 _sepay_auth_failed = False
-                try:
-                    return r.status, json.loads(body)
-                except json.JSONDecodeError:
-                    return r.status, {}
+                if not data and body.strip():
+                    log.warning("SePay tra khong phai JSON: %s", _short_body(body))
+                return r.status, data
+    except asyncio.TimeoutError:
+        log.error("SePay timeout — thu lai sau hoac kiem tra mang")
+        return 0, {}
     except Exception as e:
         log.error("SePay request loi: %s", e)
         return 0, {}
@@ -477,45 +522,62 @@ async def fetch_key(package_id: str) -> str | None:
     base = _api_base(pk)
     days = pkg["days"]
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            login_resp = await session.post(
-                base + "/api/login",
-                json={"username": API_ADMIN_USER, "password": API_ADMIN_PASS},
-                timeout=aiohttp.ClientTimeout(total=25),
-            )
-            if login_resp.status != 200:
-                body = await login_resp.text()
-                log.error("[%s] login %s fail %s: %s", pk, base, login_resp.status, body[:200])
-                return None
+    login_url = base + "/api/login"
+    key_url = base + "/api/createkey"
+    payload = {
+        "days": days,
+        "key_type": "single_device",
+        "created_by": "BoutiqueNexus",
+        "note": "discord-" + package_id,
+    }
 
-            log.info("[%s] login OK @ %s → createkey %sd", pk, base, days)
-            key_resp = await session.post(
-                base + "/api/createkey",
-                json={
-                    "days": days,
-                    "key_type": "single_device",
-                    "created_by": "BoutiqueNexus",
-                    "note": "discord-" + package_id,
-                },
-                timeout=aiohttp.ClientTimeout(total=25),
-            )
-            try:
-                data = await key_resp.json()
-            except Exception:
-                data = {}
-            if key_resp.status in (200, 201):
-                key = data.get("key") or data.get("license") or data.get("data")
-                if isinstance(key, dict):
-                    key = key.get("key")
-                if key:
-                    log.info("[%s] key OK: %s", pk, str(key)[:12] + "...")
-                    return str(key)
-            log.error("[%s] createkey %s: %s", pk, key_resp.status, data)
+    for attempt in range(2):
+        try:
+            async with aiohttp.ClientSession(headers=HTTP_HEADERS) as session:
+                login_resp = await session.post(
+                    login_url,
+                    json={"username": API_ADMIN_USER, "password": API_ADMIN_PASS},
+                    headers={"Content-Type": "application/json"},
+                    timeout=API_TIMEOUT,
+                )
+                login_body, _ = await _read_http(login_resp)
+                if login_resp.status != 200 or _is_cloudflare_html(login_body):
+                    _log_http_fail("[%s] login" % pk, login_url, login_resp.status, login_body)
+                    if attempt == 0 and login_resp.status in (502, 503, 520, 521, 522, 524):
+                        await asyncio.sleep(20)
+                        continue
+                    return None
+
+                log.info("[%s] login OK @ %s → createkey %sd", pk, base, days)
+                key_resp = await session.post(
+                    key_url,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=API_TIMEOUT,
+                )
+                key_body, data = await _read_http(key_resp)
+                if key_resp.status in (200, 201) and not _is_cloudflare_html(key_body):
+                    key = data.get("key") or data.get("license") or data.get("data")
+                    if isinstance(key, dict):
+                        key = key.get("key")
+                    if key:
+                        log.info("[%s] key OK: %s", pk, str(key)[:12] + "...")
+                        return str(key)
+                _log_http_fail("[%s] createkey" % pk, key_url, key_resp.status, key_body or str(data))
+                if attempt == 0 and key_resp.status in (502, 503, 520, 521, 522, 524):
+                    await asyncio.sleep(20)
+                    continue
+                return None
+        except asyncio.TimeoutError:
+            log.error("[%s] API timeout %s (lan %d) — Render co the dang ngu", pk, base, attempt + 1)
+            if attempt == 0:
+                await asyncio.sleep(15)
+                continue
             return None
-    except Exception as e:
-        log.error("fetch_key [%s] loi: %s", package_id, e)
-        return None
+        except Exception as e:
+            log.error("fetch_key [%s] loi: %s", package_id, e)
+            return None
+    return None
 
 async def confirm_payment(order_id: str, txn_fp: str | None = None):
     order = orders.get(order_id)
@@ -1156,6 +1218,38 @@ async def info(ctx: commands.Context):
         + "🔫 Aimbot: `" + API_AIMBOT_BASE + "`",
         delete_after=30,
     )
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def apitest(ctx: commands.Context):
+    """Kiem tra 2 server key (phat hien Cloudflare / Render ngu)."""
+    await ctx.send("Dang goi API...", delete_after=5)
+    lines = []
+    for pk in ("legit_drag", "aimbot_head"):
+        base = _api_base(pk)
+        t0 = time.time()
+        try:
+            async with aiohttp.ClientSession(headers=HTTP_HEADERS) as s:
+                async with s.post(
+                    base + "/api/login",
+                    json={"username": API_ADMIN_USER, "password": API_ADMIN_PASS},
+                    headers={"Content-Type": "application/json"},
+                    timeout=API_TIMEOUT,
+                ) as r:
+                    body, _ = await _read_http(r)
+                    ms = int((time.time() - t0) * 1000)
+                    if _is_cloudflare_html(body):
+                        lines.append("**" + pk + "**: CLOUDFLARE " + str(r.status) + " (" + str(ms) + "ms)")
+                    elif r.status == 200:
+                        lines.append("**" + pk + "**: OK (" + str(ms) + "ms)")
+                    else:
+                        lines.append("**" + pk + "**: HTTP " + str(r.status) + " — " + _short_body(body, 80))
+        except asyncio.TimeoutError:
+            lines.append("**" + pk + "**: TIMEOUT (>60s) — mo " + base + " tren browser de danh thuc")
+        except Exception as ex:
+            lines.append("**" + pk + "**: " + str(ex)[:80])
+    e = discord.Embed(title="API Health", description="\n".join(lines), color=C_NEXUS)
+    await ctx.send(embed=e)
 
 @bot.command()
 @commands.has_permissions(administrator=True)
