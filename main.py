@@ -56,7 +56,7 @@ SHOP_THUMBNAIL = _clean_env(os.getenv("SHOP_THUMBNAIL", ""))
 SUPPORT_TEXT   = _clean_env(os.getenv("SUPPORT_TEXT", "Ticket server · DM admin"))
 DEPOSIT_MSG_TTL = int(os.getenv("DEPOSIT_MSG_TTL", "120"))
 
-# Theme — Boutique Nexus (không dùng layout shop clone)
+# Theme — Boutique Nexus
 C_NEXUS   = 0xF5C451
 C_PANEL   = 0x12151C
 C_OK      = 0x3DFFA8
@@ -339,18 +339,18 @@ def _txn_fingerprint(txn: dict) -> str:
     return "fp:" + _get_txn_date(txn) + "|" + str(_get_txn_amount(txn)) + "|" + _get_txn_text(txn)[:80]
 
 def _is_incoming(txn: dict) -> bool:
-    """SePay list API thường không có transferType — dùng amount_in."""
+    """SePay list API thường không có transferType — dùng amount_in.
+    MSB/NAPAS: transferType thường None, amount_in/amount_out phân biệt chiều.
+    """
     t = txn.get("transferType")
-    if t is not None and str(t).lower() == "out":
-        return False
-    if t is not None and str(t).lower() == "in":
-        return True
+    if t is not None:
+        return str(t).lower() == "in"
     try:
-        if float(txn.get("amount_in") or 0) > 0:
-            return True
+        ain  = float(txn.get("amount_in")  or 0)
+        aout = float(txn.get("amount_out") or 0)
+        return ain > 0 and aout == 0
     except (TypeError, ValueError):
-        pass
-    return _get_txn_amount(txn) > 0
+        return False
 
 def _pending_same_amount(amount: int) -> list[str]:
     return [
@@ -360,7 +360,7 @@ def _pending_same_amount(amount: int) -> list[str]:
     ]
 
 def _newest_pending_for_amount(amount: int) -> str | None:
-    """Đơn chờ cùng số tiền — lấy đơn mới nhất (MSB/SePay hay không gửi mã NAP)."""
+    """Đơn chờ cùng số tiền — lấy đơn mới nhất."""
     cands = [
         (oid, o.get("created_at", 0))
         for oid, o in orders.items()
@@ -369,6 +369,39 @@ def _newest_pending_for_amount(amount: int) -> str | None:
     if not cands:
         return None
     return max(cands, key=lambda x: x[1])[0]
+
+def _txn_matches_order(txn: dict, oid: str, order: dict) -> bool:
+    """Kiểm tra một giao dịch có khớp với đơn hàng không."""
+    amount       = _get_txn_amount(txn)
+    order_amount = order.get("amount", 0)
+    all_text     = _get_txn_text(txn)
+
+    # 1) Mã NAP xuất hiện trong nội dung CK
+    if _order_id_in_text(oid, all_text):
+        if amount >= order_amount:
+            log.info("Khop MA DON %s | %d>=%d | %.50s", oid, amount, order_amount, all_text)
+            return True
+        log.warning("Ma don %s trong CK nhung thieu tien: %d < %d", oid, amount, order_amount)
+        return False
+
+    # 2) Dự phòng: đúng số tiền (SePay thường KHÔNG gửi mã NAP trong content — MSB/NAPAS)
+    if amount != order_amount:
+        return False
+
+    same = _pending_same_amount(amount)
+    # Chỉ 1 đơn chờ cùng số tiền → khớp luôn (an toàn)
+    if len(same) == 1 and oid == same[0]:
+        log.info("Khop AMOUNT (1 don cho) %s | %d | sepay_text=%.50s", oid, order_amount, all_text)
+        return True
+
+    # Nhiều đơn cùng số tiền → kiểm tra thêm timestamp
+    order_created = order.get("created_at", 0)
+    txn_ts = _txn_timestamp(txn, order_created)
+    if oid in same and txn_ts >= (order_created - 300) and (txn_ts - order_created) <= 3600:
+        log.info("Khop AMOUNT+TIME don %s | %d VND", oid, order_amount)
+        return True
+
+    return False
 
 def _find_order_for_txn(txn: dict) -> tuple[str | None, str | None]:
     """Tra don khop; tra (order_id, fingerprint)."""
@@ -383,9 +416,7 @@ def _find_order_for_txn(txn: dict) -> tuple[str | None, str | None]:
     if amount <= 0:
         return None, None
 
-    text = _get_txn_text(txn)
-
-    # 1) Mã NAP trong nội dung (nếu SePay có gửi)
+    # Duyệt đơn chờ từ mới đến cũ
     for oid, order in sorted(
         orders.items(),
         key=lambda x: x[1].get("created_at", 0),
@@ -393,16 +424,8 @@ def _find_order_for_txn(txn: dict) -> tuple[str | None, str | None]:
     ):
         if order.get("paid") or _order_expired(order):
             continue
-        need = order.get("amount", 0)
-        if _order_id_in_text(oid, text) and amount >= need:
-            log.info("Khop MA DON %s | %d>=%d | %.50s", oid, amount, need, text)
+        if _txn_matches_order(txn, oid, order):
             return oid, fp
-
-    # 2) Đúng số tiền → đơn pending mới nhất (fix MSB không gửi NAP trong API)
-    best = _newest_pending_for_amount(amount)
-    if best:
-        log.info("Khop AMOUNT don %s | %d | pending=%s | %.50s", best, amount, _pending_same_amount(amount), text)
-        return best, fp
 
     return None, None
 
