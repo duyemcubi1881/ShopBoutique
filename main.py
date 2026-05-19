@@ -882,7 +882,7 @@ def embed_nexus() -> discord.Embed:
         title="✦ DUCDUY BOUTIQUE",
         description=(
             "```ansi\n"
-            "\u001b[1;35m《 HỆ THỐNG LICENSE CAO CẤP 》\u001b[0m\n"
+            "\u001b[1;35m Shop ducduy boutique \u001b[0m\n"
             "```\n"
 
             "╭・⚡ **Giao Key Tự Động**\n"
