@@ -42,19 +42,27 @@ ACCOUNT_NAME   = _clean_env(os.getenv("ACCOUNT_NAME", "DUCDUY BOUTIQUE"))
 BANK_DISPLAY   = _clean_env(os.getenv("BANK_DISPLAY", "MSB Bank"))
 SEPAY_TOKEN    = _clean_env(os.getenv("SEPAY_TOKEN") or os.getenv("SEPAY_API_KEY"))
 ORDER_EXPIRE   = int(os.getenv("ORDER_EXPIRE_MINUTES", "15")) * 60
-API_BASE       = _clean_env(os.getenv("API_BASE", "https://aovduy.onrender.com"))
-API_ADMIN_USER = _clean_env(os.getenv("API_ADMIN_USER", "admin"))
-API_ADMIN_PASS = _clean_env(os.getenv("API_ADMIN_PASS", "admin123"))
+API_AIMBOT_BASE = _clean_env(os.getenv("API_AIMBOT_BASE", "https://aovduy.onrender.com")).rstrip("/")
+API_LEGIT_BASE  = _clean_env(os.getenv("API_LEGIT_BASE", "https://api2-inoj.onrender.com")).rstrip("/")
+API_ADMIN_USER  = _clean_env(os.getenv("API_ADMIN_USER"))
+API_ADMIN_PASS  = _clean_env(os.getenv("API_ADMIN_PASS"))
 PUBLIC_URL     = _clean_env(
     os.getenv("PUBLIC_URL")
     or os.getenv("RENDER_EXTERNAL_URL")
     or "https://shopboutique.onrender.com"
 )
 WEBHOOK_PORT   = int(os.getenv("PORT") or os.getenv("WEBHOOK_PORT") or "8080")
-SHOP_COLOR     = 0x9B59B6
 SHOP_THUMBNAIL = _clean_env(os.getenv("SHOP_THUMBNAIL", ""))
-SUPPORT_TEXT   = _clean_env(os.getenv("SUPPORT_TEXT", "Mở ticket trên server hoặc DM admin"))
+SUPPORT_TEXT   = _clean_env(os.getenv("SUPPORT_TEXT", "Ticket server · DM admin"))
 DEPOSIT_MSG_TTL = int(os.getenv("DEPOSIT_MSG_TTL", "120"))
+
+# Theme — Boutique Nexus (không dùng layout shop clone)
+C_NEXUS   = 0xF5C451
+C_PANEL   = 0x12151C
+C_OK      = 0x3DFFA8
+C_LEGIT   = 0x3DFFA8
+C_AIMBOT  = 0xFF4FD8
+C_MUTED   = 0x7A8499
 
 logging.basicConfig(
     level=logging.INFO,
@@ -121,6 +129,9 @@ PRODUCTS = {
     "legit_drag": {
         "label": "Legit Drag",
         "emoji": "🎯",
+        "tagline": "Precision · Smooth · Undetected lane",
+        "server": "INOJ Cloud",
+        "accent": C_LEGIT,
         "packages": [
             {"id": "ld_3h",  "name": "Legit Drag 3 Gio",   "price":   3_000, "duration": "3 gio",   "days": 1},
             {"id": "ld_1d",  "name": "Legit Drag 1 Ngay",  "price":  10_000, "duration": "1 ngay",  "days": 1},
@@ -132,6 +143,9 @@ PRODUCTS = {
     "aimbot_head": {
         "label": "Aimbot Head",
         "emoji": "🔫",
+        "tagline": "Head-tier · Fast lock · Pro lane",
+        "server": "AOV Duy Node",
+        "accent": C_AIMBOT,
         "packages": [
             {"id": "ah_3h",  "name": "Aimbot Head 3 Gio",   "price":   5_000, "duration": "3 gio",   "days": 1},
             {"id": "ah_1d",  "name": "Aimbot Head 1 Ngay",  "price":  15_000, "duration": "1 ngay",  "days": 1},
@@ -145,10 +159,16 @@ PRODUCTS = {
 PKG: dict[str, dict] = {}
 for _pk, _pv in PRODUCTS.items():
     for _pkg in _pv["packages"]:
-        PKG[_pkg["id"]] = {**_pkg, "product_label": _pv["label"]}
+        PKG[_pkg["id"]] = {**_pkg, "product_key": _pk, "product_label": _pv["label"]}
 
 def _min_price(product_key: str) -> int:
     return min(p["price"] for p in PRODUCTS[product_key]["packages"])
+
+def _api_base(product_key: str) -> str:
+    return API_LEGIT_BASE if product_key == "legit_drag" else API_AIMBOT_BASE
+
+def _fmt_vnd(n: int) -> str:
+    return "{:,}".format(n) + "₫"
 
 # ══════════════════════════════════════════
 # HAM TIEN ICH
@@ -197,7 +217,7 @@ def build_deposit_embed(amount: int, order_id: str) -> discord.Embed:
     e = discord.Embed(
         title="💳  Thông tin nạp tiền",
         description="Chuyển khoản **đúng** thông tin bên dưới — bot sẽ **tự động cộng tiền** khi nhận được.",
-        color=SHOP_COLOR,
+        color=C_NEXUS,
     )
     e.add_field(
         name="💵  Thông tin nạp",
@@ -443,36 +463,55 @@ async def _sepay_get(params: dict | None = None) -> tuple[int, dict]:
         return 0, {}
 
 async def fetch_key(package_id: str) -> str | None:
-    pkg  = PKG.get(package_id)
-    days = pkg["days"] if pkg else 1
+    pkg = PKG.get(package_id)
+    if not pkg:
+        return None
+    if not API_ADMIN_USER or not API_ADMIN_PASS:
+        log.error("Chua cau hinh API_ADMIN_USER / API_ADMIN_PASS")
+        return None
+
+    pk = pkg["product_key"]
+    base = _api_base(pk)
+    days = pkg["days"]
+
     try:
-        async with aiohttp.ClientSession() as s:
-            login_resp = await s.post(
-                API_BASE + "/api/login",
+        async with aiohttp.ClientSession() as session:
+            login_resp = await session.post(
+                base + "/api/login",
                 json={"username": API_ADMIN_USER, "password": API_ADMIN_PASS},
-                timeout=aiohttp.ClientTimeout(total=10),
+                timeout=aiohttp.ClientTimeout(total=25),
             )
             if login_resp.status != 200:
                 body = await login_resp.text()
-                log.error("Login backend that bai %d: %s", login_resp.status, body[:200])
+                log.error("[%s] login %s fail %s: %s", pk, base, login_resp.status, body[:200])
                 return None
-            key_resp = await s.post(
-                API_BASE + "/api/createkey",
+
+            log.info("[%s] login OK @ %s → createkey %sd", pk, base, days)
+            key_resp = await session.post(
+                base + "/api/createkey",
                 json={
                     "days": days,
                     "key_type": "single_device",
-                    "created_by": "ShopBot",
-                    "note": "Auto-" + package_id,
+                    "created_by": "BoutiqueNexus",
+                    "note": "discord-" + package_id,
                 },
-                timeout=aiohttp.ClientTimeout(total=10),
+                timeout=aiohttp.ClientTimeout(total=25),
             )
-            data = await key_resp.json()
-            if key_resp.status == 201:
-                return data.get("key")
-            log.error("Tao key that bai %d: %s", key_resp.status, data)
+            try:
+                data = await key_resp.json()
+            except Exception:
+                data = {}
+            if key_resp.status in (200, 201):
+                key = data.get("key") or data.get("license") or data.get("data")
+                if isinstance(key, dict):
+                    key = key.get("key")
+                if key:
+                    log.info("[%s] key OK: %s", pk, str(key)[:12] + "...")
+                    return str(key)
+            log.error("[%s] createkey %s: %s", pk, key_resp.status, data)
             return None
     except Exception as e:
-        log.error("fetch_key loi: %s", e)
+        log.error("fetch_key [%s] loi: %s", package_id, e)
         return None
 
 async def confirm_payment(order_id: str, txn_fp: str | None = None):
@@ -510,7 +549,7 @@ async def confirm_payment(order_id: str, txn_fp: str | None = None):
         embed.add_field(name="🧾  Mã đơn", value="`" + order_id + "`", inline=False)
         embed.add_field(
             name="👉  Tiếp theo",
-            value="Quay lại shop → **🛒 Mua Key** để nhận key qua DM.",
+            value="Quay lại shop → chọn **lane** → mua key qua DM.",
             inline=False,
         )
         embed.set_footer(text="ducduy boutique")
@@ -759,9 +798,20 @@ class BuyModal(discord.ui.Modal):
                 ephemeral=True,
             )
 
+        pv = PRODUCTS[pkg["product_key"]]
         await interaction.response.defer(ephemeral=True)
-        deduct_balance(uid, total)
+        await interaction.edit_original_response(
+            embed=discord.Embed(
+                title="⏳  Đang kết nối máy chủ license...",
+                description=(
+                    "Lane **" + pv["label"] + "** → `" + _api_base(pkg["product_key"]) + "`\n"
+                    "Vui lòng đợi vài giây."
+                ),
+                color=pv["accent"],
+            )
+        )
 
+        deduct_balance(uid, total)
         keys_ok: list[str] = []
         keys_err = 0
         for _ in range(qty):
@@ -775,213 +825,230 @@ class BuyModal(discord.ui.Modal):
             add_balance(uid, pkg["price"] * keys_err)
 
         new_bal = get_balance(uid)
-        embed = discord.Embed(title="✅  Mua key thành công!", color=0x2ECC71)
-        embed.description = (
-            "🛒 **" + pkg["name"] + "**\n"
-            + "⏱️ Thời hạn: **" + pkg["duration"] + "**\n"
-            + "🔢 Số lượng: **" + str(len(keys_ok)) + " key**\n"
-            + "💸 Đã trừ: **" + "{:,}".format(pkg["price"] * len(keys_ok)) + " VNĐ**\n"
-            + "💰 Số dư còn: **" + "{:,}".format(new_bal) + " VNĐ**"
+        accent = pv["accent"]
+        receipt = discord.Embed(title="◈  Giao dịch hoàn tất", color=accent)
+        receipt.description = (
+            "**" + pkg["name"] + "**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "⏱️ `" + pkg["duration"] + "`  ·  🔢 `" + str(len(keys_ok)) + "` key\n"
+            "💸 −`" + _fmt_vnd(pkg["price"] * len(keys_ok)) + "`  ·  💰 ví `" + _fmt_vnd(new_bal) + "`"
         )
         if keys_err:
-            embed.add_field(
-                name="⚠️ Lưu ý",
-                value=str(keys_err) + " key lỗi → đã hoàn **" + "{:,}".format(pkg["price"] * keys_err) + " VNĐ**",
+            receipt.add_field(
+                name="Hoàn tiền",
+                value="`" + str(keys_err) + "` key lỗi → +" + _fmt_vnd(pkg["price"] * keys_err),
                 inline=False,
             )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.edit_original_response(embed=receipt, view=None)
 
         if keys_ok:
             try:
-                user     = await bot.fetch_user(uid)
-                key_text = "\n".join("`" + k + "`" for k in keys_ok)
-                dm = discord.Embed(title="🔑  Key của bạn!", color=0xE91E8C)
-                dm.description = (
-                    "```\n"
-                    "╔══════════════════════════════╗\n"
-                    "       ✅  Mua thành công\n"
-                    "╚══════════════════════════════╝\n"
-                    "```"
-                    + "🛒 **" + pkg["name"] + "**\n"
-                    + "⏱️ Thời hạn: **" + pkg["duration"] + "**\n\n"
-                    + "🔑 **Key:**\n" + key_text + "\n\n"
-                    + "📁 File & hướng dẫn trong server\n"
-                    + "🙏 Cảm ơn bạn đã dùng **ducduy boutique**"
+                user = await bot.fetch_user(uid)
+                keys_block = "\n".join("▸ `" + k + "`" for k in keys_ok)
+                dm = discord.Embed(
+                    title="◈  LICENSE · " + pv["label"].upper(),
+                    color=accent,
                 )
-                dm.set_footer(text="⚠️ Không chia sẻ key với người khác!")
+                dm.description = (
+                    "```fix\n"
+                    "┏━━━━━━━━ LICENSE UNLOCKED ━━━━━━━━┓\n"
+                    "┃  " + pv["emoji"] + "  " + pkg["name"] + "\n"
+                    "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
+                    "```\n"
+                    + keys_block + "\n\n"
+                    "⏱️ **Hạn:** " + pkg["duration"] + "\n"
+                    "🛰️ **Node:** " + pv["server"] + "\n\n"
+                    "⚠️ Không chia sẻ key · một thiết bị"
+                )
+                dm.set_footer(text="ducduy boutique · nexus")
                 await user.send(embed=dm)
             except discord.Forbidden:
                 await interaction.followup.send(
-                    "⚠️ Không gửi DM được. Hãy mở DM để nhận key!", ephemeral=True
+                    "⚠️ Bật DM để nhận key!", ephemeral=True
                 )
             except Exception as e:
                 log.error("DM key loi: %s", e)
 
-class PackageButton(discord.ui.Button):
-    def __init__(self, pkg: dict):
-        super().__init__(
-            label=pkg["name"] + "  —  " + "{:,}".format(pkg["price"]) + "đ",
-            style=discord.ButtonStyle.primary,
-            custom_id="pkg_" + pkg["id"],
-        )
-        self.pkg_id = pkg["id"]
+# ══════════════════════════════════════════
+# UI — BOUTIQUE NEXUS
+# ══════════════════════════════════════════
 
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(BuyModal(self.pkg_id))
-
-class PackageView(discord.ui.View):
-    def __init__(self, product_key: str):
-        super().__init__(timeout=120)
-        for pkg in PRODUCTS[product_key]["packages"]:
-            self.add_item(PackageButton(pkg))
-
-    @discord.ui.button(label="◀  Quay lại", style=discord.ButtonStyle.secondary, row=4)
-    async def back(self, interaction: discord.Interaction, _btn):
-        await interaction.response.edit_message(embed=embed_category(), view=CategoryView())
-
-class CategoryView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=120)
-
-    @discord.ui.select(
-        placeholder="🎮  Chọn sản phẩm...",
-        options=[
-            discord.SelectOption(label="Legit Drag",  value="legit_drag",  emoji="🎯", description="Tu 3.000d"),
-            discord.SelectOption(label="Aimbot Head", value="aimbot_head", emoji="🔫", description="Tu 5.000d"),
-        ],
-    )
-    async def select_product(self, interaction: discord.Interaction, select: discord.ui.Select):
-        pk = select.values[0]
-        await interaction.response.edit_message(embed=embed_packages(pk), view=PackageView(pk))
-
-    @discord.ui.button(label="◀  Quay lại", style=discord.ButtonStyle.secondary)
-    async def back(self, interaction: discord.Interaction, _btn):
-        await interaction.response.edit_message(embed=embed_shop(), view=ShopView())
-
-class ShopView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.select(
-        placeholder="📌  Chọn danh mục...",
-        min_values=1,
-        max_values=1,
-        options=[
-            discord.SelectOption(
-                label="Legit Drag",
-                value="legit_drag",
-                emoji="🎯",
-                description="Từ {:,}đ".format(_min_price("legit_drag")),
-            ),
-            discord.SelectOption(
-                label="Aimbot Head",
-                value="aimbot_head",
-                emoji="🔫",
-                description="Từ {:,}đ".format(_min_price("aimbot_head")),
-            ),
-        ],
-        row=0,
-    )
-    async def select_category(self, interaction: discord.Interaction, select: discord.ui.Select):
-        pk = select.values[0]
-        await interaction.response.send_message(
-            embed=embed_packages(pk),
-            view=PackageView(pk),
-            ephemeral=True,
-        )
-
-    @discord.ui.button(label="💳  Nạp tiền", style=discord.ButtonStyle.green, row=1)
-    async def btn_deposit(self, interaction: discord.Interaction, _btn):
-        await interaction.response.send_modal(DepositModal())
-
-    @discord.ui.button(label="💰  Số dư", style=discord.ButtonStyle.primary, row=1)
-    async def btn_balance(self, interaction: discord.Interaction, _btn):
-        bal = get_balance(interaction.user.id)
-        e = discord.Embed(
-            title="💰  Số dư ví",
-            description="Số dư hiện tại: **`{:,}` VNĐ**".format(bal),
-            color=0x5865F2,
-        )
-        e.set_footer(text="ducduy boutique")
-        await interaction.response.send_message(embed=e, ephemeral=True)
-
-    @discord.ui.button(label="📖  Hướng dẫn", style=discord.ButtonStyle.secondary, row=1)
-    async def btn_guide(self, interaction: discord.Interaction, _btn):
-        await interaction.response.send_message(embed=embed_guide(), ephemeral=True)
-
-def embed_shop() -> discord.Embed:
+def embed_nexus() -> discord.Embed:
     ld = PRODUCTS["legit_drag"]
     ah = PRODUCTS["aimbot_head"]
-    bar = "═" * 32
-    e = discord.Embed(
-        title="🛒  ducduy boutique — Auto Buy",
-        description="**🔥  Danh mục đang bán**\n```" + bar + "```",
-        color=SHOP_COLOR,
+    e = discord.Embed(color=C_PANEL)
+    e.description = (
+        "```ansi\n"
+        "\u001b[1;33m◈━━━━━━━━ BOUTIQUE NEXUS ━━━━━━━━◈\u001b[0m\n"
+        "```\n"
+        "*Trạm cấp license AOV · VietQR · giao key tức thì qua DM*\n\n"
+        "┌ **" + ld["emoji"] + " LEGIT LANE** ─────────────────\n"
+        "│ " + ld["tagline"] + "\n"
+        "│ Node `" + API_LEGIT_BASE.replace("https://", "") + "`\n"
+        "│ Từ **" + _fmt_vnd(_min_price("legit_drag")) + "**\n"
+        "└────────────────────────────\n\n"
+        "┌ **" + ah["emoji"] + " AIMBOT LANE** ────────────────\n"
+        "│ " + ah["tagline"] + "\n"
+        "│ Node `" + API_AIMBOT_BASE.replace("https://", "") + "`\n"
+        "│ Từ **" + _fmt_vnd(_min_price("aimbot_head")) + "**\n"
+        "└────────────────────────────"
     )
     e.add_field(
-        name="➡️  " + ld["emoji"] + "  " + ld["label"],
-        value=(
-            "💰 **Giá:** từ `{:,}` VNĐ\n".format(_min_price("legit_drag"))
-            + "📦 **Kho:** ✅ Key tự động"
-        ),
-        inline=True,
-    )
-    e.add_field(
-        name="➡️  " + ah["emoji"] + "  " + ah["label"],
-        value=(
-            "💰 **Giá:** từ `{:,}` VNĐ\n".format(_min_price("aimbot_head"))
-            + "📦 **Kho:** ✅ Key tự động"
-        ),
-        inline=True,
-    )
-    e.add_field(
-        name="📞  Support",
-        value="📩  " + SUPPORT_TEXT,
+        name="◎ Quy trình",
+        value="`Nạp` → `Chọn lane` → `Chọn gói` → `Key về DM`",
         inline=False,
     )
-    e.set_footer(text="Vui lòng chọn danh mục bên dưới để tiếp tục")
+    e.add_field(name="◎ Support", value=SUPPORT_TEXT, inline=False)
+    if bot.user and bot.user.display_avatar:
+        e.set_author(name="ducduy boutique", icon_url=bot.user.display_avatar.url)
+    else:
+        e.set_author(name="ducduy boutique")
+    e.set_footer(text="Chọn lane bên dưới · panel cố định")
     if SHOP_THUMBNAIL:
-        e.set_thumbnail(url=SHOP_THUMBNAIL)
+        e.set_image(url=SHOP_THUMBNAIL)
+    return e
+
+def embed_vault(product_key: str) -> discord.Embed:
+    pv = PRODUCTS[product_key]
+    lines = []
+    for p in pv["packages"]:
+        lines.append(
+            "▸ **" + p["duration"] + "** — `" + _fmt_vnd(p["price"]) + "`"
+        )
+    e = discord.Embed(
+        title=pv["emoji"] + "  VAULT · " + pv["label"].upper(),
+        description=(
+            "*" + pv["tagline"] + "*\n"
+            "🛰️ `" + _api_base(product_key) + "`\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            + "\n".join(lines)
+            + "\n\n↓ **Chọn gói** trong menu để mua"
+        ),
+        color=pv["accent"],
+    )
+    e.set_footer(text="ducduy boutique · lane " + product_key)
     return e
 
 def embed_guide() -> discord.Embed:
-    e = discord.Embed(title="📖  Hướng dẫn sử dụng shop", color=SHOP_COLOR)
-    e.description = (
-        "**1.** Chọn **danh mục** (Legit Drag / Aimbot Head)\n"
-        "**2.** Ấn gói muốn mua → nhập số lượng\n"
-        "**3.** Nếu thiếu tiền → **💳 Nạp tiền** → quét QR\n"
-        "**4.** Sau khi nạp, bot **tự cộng tiền** và gửi DM\n"
-        "**5.** Mua key → nhận key qua **DM** ngay lập tức\n\n"
-        "⚠️ Chuyển khoản **đúng số tiền** và **đúng mã đơn** khi nạp."
-    )
-    e.set_footer(text="ducduy boutique")
-    return e
-
-def embed_category() -> discord.Embed:
-    e = discord.Embed(title="🛒  Danh mục sản phẩm", color=SHOP_COLOR)
-    lines = []
-    for key, pv in PRODUCTS.items():
-        lines.append(
-            pv["emoji"] + " **" + pv["label"] + "** — từ `{:,}`đ".format(_min_price(key))
-        )
-    e.description = "\n".join(lines) + "\n\n*Chọn danh mục trong menu shop chính ↓*"
-    return e
-
-def embed_packages(product_key: str) -> discord.Embed:
-    pv = PRODUCTS[product_key]
     e = discord.Embed(
-        title=pv["emoji"] + "  " + pv["label"] + " — Chọn gói",
-        description="```" + ("═" * 28) + "```",
-        color=SHOP_COLOR,
+        title="◎  Nexus Guide",
+        description=(
+            "**①** Ấn lane **Legit** hoặc **Aimbot**\n"
+            "**②** Chọn gói → nhập số lượng\n"
+            "**③** Bot trừ ví → **tự gọi server** tạo key\n"
+            "**④** Key gửi **DM** (mỗi loại server riêng)\n\n"
+            "**Nạp tiền:** `Nạp ví` → QR → auto cộng\n"
+            "⚠️ CK đúng **số tiền** + **mã NAP**"
+        ),
+        color=C_NEXUS,
     )
-    for pkg in pv["packages"]:
-        e.add_field(
-            name=pkg["name"],
-            value="💰 `{:,}`đ  •  ⏱️ {}".format(pkg["price"], pkg["duration"]),
-            inline=False,
-        )
-    e.set_footer(text="Ấn nút bên dưới để mua  •  ducduy boutique")
     return e
+
+class PackageSelect(discord.ui.Select):
+    def __init__(self, product_key: str):
+        pv = PRODUCTS[product_key]
+        opts = []
+        for p in pv["packages"]:
+            opts.append(
+                discord.SelectOption(
+                    label=p["duration"] + " · " + _fmt_vnd(p["price"]),
+                    value=p["id"],
+                    description=p["name"][:95],
+                )
+            )
+        super().__init__(
+            placeholder="⚡  Chọn gói license...",
+            min_values=1,
+            max_values=1,
+            options=opts,
+            row=0,
+        )
+        self.product_key = product_key
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(BuyModal(self.values[0]))
+
+class VaultView(discord.ui.View):
+    def __init__(self, product_key: str):
+        super().__init__(timeout=180)
+        self.product_key = product_key
+        self.add_item(PackageSelect(product_key))
+
+    @discord.ui.button(label="←  Thoát vault", style=discord.ButtonStyle.secondary, row=1)
+    async def leave(self, interaction: discord.Interaction, _btn):
+        await interaction.response.edit_message(
+            content="◈ Quay lại **panel Nexus** trên kênh shop.",
+            embed=None,
+            view=None,
+        )
+
+class NexusHubView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="LEGIT DRAG",
+        emoji="🎯",
+        style=discord.ButtonStyle.success,
+        custom_id="nexus_vault_legit",
+        row=0,
+    )
+    async def open_legit(self, interaction: discord.Interaction, _btn):
+        await interaction.response.send_message(
+            embed=embed_vault("legit_drag"),
+            view=VaultView("legit_drag"),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(
+        label="AIMBOT HEAD",
+        emoji="🔫",
+        style=discord.ButtonStyle.danger,
+        custom_id="nexus_vault_aimbot",
+        row=0,
+    )
+    async def open_aimbot(self, interaction: discord.Interaction, _btn):
+        await interaction.response.send_message(
+            embed=embed_vault("aimbot_head"),
+            view=VaultView("aimbot_head"),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(
+        label="Nạp ví",
+        emoji="💳",
+        style=discord.ButtonStyle.primary,
+        custom_id="nexus_wallet",
+        row=1,
+    )
+    async def wallet(self, interaction: discord.Interaction, _btn):
+        await interaction.response.send_modal(DepositModal())
+
+    @discord.ui.button(
+        label="Số dư",
+        emoji="✨",
+        style=discord.ButtonStyle.secondary,
+        custom_id="nexus_balance",
+        row=1,
+    )
+    async def balance(self, interaction: discord.Interaction, _btn):
+        bal = get_balance(interaction.user.id)
+        e = discord.Embed(
+            title="✨  Ví Nexus",
+            description="```\n" + _fmt_vnd(bal) + "\n```",
+            color=C_NEXUS,
+        )
+        await interaction.response.send_message(embed=e, ephemeral=True)
+
+    @discord.ui.button(
+        label="Guide",
+        emoji="📡",
+        style=discord.ButtonStyle.secondary,
+        custom_id="nexus_guide",
+        row=1,
+    )
+    async def guide(self, interaction: discord.Interaction, _btn):
+        await interaction.response.send_message(embed=embed_guide(), ephemeral=True)
 
 # ══════════════════════════════════════════
 # LENH
@@ -993,7 +1060,7 @@ async def shop(ctx: commands.Context):
         await ctx.message.delete()
     except Exception:
         pass
-    await ctx.send(embed=embed_shop(), view=ShopView())
+    await ctx.send(embed=embed_nexus(), view=NexusHubView())
 
 @bot.command()
 @commands.has_permissions(administrator=True)
@@ -1050,7 +1117,8 @@ async def info(ctx: commands.Context):
         + "🔌 Port: `" + str(WEBHOOK_PORT) + "`\n"
         + "🔑 SePay: `" + sepay_ok + "`\n"
         + "⏳ Đơn chờ: `" + str(pending) + "` / Tổng: `" + str(len(orders)) + "`\n"
-        + "🖥️ Backend: `" + API_BASE + "`",
+        + "🎯 Legit: `" + API_LEGIT_BASE + "`\n"
+        + "🔫 Aimbot: `" + API_AIMBOT_BASE + "`",
         delete_after=30,
     )
 
@@ -1152,5 +1220,9 @@ async def on_ready():
         log.warning("SEPAY_TOKEN bi 401 — can cap nhat tren Render")
     else:
         log.info("SEPAY_TOKEN OK (do dai %d)", len(SEPAY_TOKEN))
+    if not API_ADMIN_USER or not API_ADMIN_PASS:
+        log.warning("API_ADMIN_USER/PASS chua cau hinh — khong tao duoc key!")
+    else:
+        log.info("API Legit: %s | Aimbot: %s", API_LEGIT_BASE, API_AIMBOT_BASE)
 
 bot.run(TOKEN)
