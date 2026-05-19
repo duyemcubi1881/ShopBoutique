@@ -4,12 +4,15 @@ from dotenv import load_dotenv
 from aiohttp import web
 import aiohttp
 import os
+import re
 import random
 import json
 import logging
 import time
 import datetime
 from pathlib import Path
+
+VN_TZ = datetime.timezone(datetime.timedelta(hours=7))
 
 # ══════════════════════════════════════════
 # LOAD ENV
@@ -236,6 +239,19 @@ def _get_txn_amount(txn: dict) -> int:
     val = txn.get("transferAmount") or txn.get("amount_in") or txn.get("amount") or 0
     return _parse_amount(val)
 
+def _unwrap_txn(body) -> dict:
+    if not isinstance(body, dict):
+        return {}
+    for key in ("transaction", "data", "payload", "body"):
+        inner = body.get(key)
+        if isinstance(inner, dict) and (
+            inner.get("transferAmount") is not None
+            or inner.get("amount_in") is not None
+            or inner.get("content")
+        ):
+            return inner
+    return body
+
 def _get_txn_text(txn: dict) -> str:
     parts = [
         str(txn.get("transaction_content") or ""),
@@ -249,8 +265,42 @@ def _get_txn_text(txn: dict) -> str:
     ]
     return " ".join(parts).upper()
 
+def _order_id_in_text(oid: str, text: str) -> bool:
+    if not text:
+        return False
+    compact = re.sub(r"[^A-Z0-9]", "", text.upper())
+    oid_up = oid.upper()
+    if oid_up in text.upper() or oid_up in compact:
+        return True
+    digits = oid_up.replace("NAP", "")
+    if len(digits) >= 8 and digits in compact:
+        return True
+    for m in re.findall(r"NAP\d{8,}", compact):
+        if m == oid_up:
+            return True
+    return False
+
 def _get_txn_date(txn: dict) -> str:
     return str(txn.get("transactionDate") or txn.get("transaction_date") or "")
+
+def _txn_timestamp(txn: dict) -> float:
+    s = _get_txn_date(txn)
+    if not s:
+        return time.time()
+    try:
+        dt = datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=VN_TZ)
+        return dt.timestamp()
+    except Exception:
+        return time.time()
+
+def _txn_fingerprint(txn: dict) -> str:
+    tid = str(txn.get("id") or "").strip()
+    if tid and tid not in ("0", "None"):
+        return "id:" + tid
+    ref = str(txn.get("referenceCode") or txn.get("reference_number") or "").strip()
+    if ref:
+        return "ref:" + ref
+    return "fp:" + _get_txn_date(txn) + "|" + str(_get_txn_amount(txn)) + "|" + _get_txn_text(txn)[:80]
 
 def _is_incoming(txn: dict) -> bool:
     t = txn.get("transferType")
@@ -282,41 +332,52 @@ def _match_order(txn: dict, oid: str, order: dict) -> bool:
     all_text     = _get_txn_text(txn)
     txn_date_str = _get_txn_date(txn)
 
-    # Ưu tiên: mã đơn trong nội dung CK + đủ số tiền
-    if oid.upper() in all_text:
+    # Ưu tiên: mã đơn trong nội dung CK (fuzzy) + đủ số tiền
+    if _order_id_in_text(oid, all_text):
         if amount >= order_amount:
-            log.info("Khop MA DON %s | amount %d >= %d", oid, amount, order_amount)
+            log.info("Khop MA DON %s | amount %d >= %d | text=%.60s", oid, amount, order_amount, all_text)
             return True
-        log.warning("Ma don %s co trong CK nhung thieu tien: %d < %d", oid, amount, order_amount)
+        log.warning("Ma don %s trong CK nhung thieu tien: %d < %d", oid, amount, order_amount)
         return False
 
-    # Dự phòng: đúng số tiền + chỉ 1 đơn pending cùng amount + trong 20 phút
+    # Dự phòng: đúng số tiền + đơn tạo trước giao dịch (tối đa 30 phút)
     if amount != order_amount:
-        return False
-    if len(_pending_same_amount(amount)) != 1:
         return False
 
     order_created = order.get("created_at", 0)
-    try:
-        txn_ts = datetime.datetime.strptime(txn_date_str, "%Y-%m-%d %H:%M:%S").timestamp()
-    except Exception:
-        txn_ts = time.time()
-
-    if txn_ts >= order_created and (txn_ts - order_created) <= 1200:
-        log.info("Khop AMOUNT+TIME don %s | %d VND", oid, order_amount)
-        return True
+    txn_ts = _txn_timestamp(txn)
+    if txn_ts >= (order_created - 60) and (txn_ts - order_created) <= 1800:
+        same = _pending_same_amount(amount)
+        if oid in same:
+            log.info("Khop AMOUNT+TIME don %s | %d VND", oid, order_amount)
+            return True
 
     return False
 
 def _find_order_for_txn(txn: dict) -> tuple[str | None, str | None]:
-    """Tra don khop; tra (order_id, txn_id)."""
-    tid = str(txn.get("id") or "")
-    if tid and tid in processed_txns:
+    """Tra don khop; tra (order_id, fingerprint)."""
+    fp = _txn_fingerprint(txn)
+    if fp in processed_txns:
         return None, None
+
+    # Ưu tiên đơn có mã trong nội dung CK
+    text = _get_txn_text(txn)
+    amount = _get_txn_amount(txn)
+    for oid, order in sorted(
+        orders.items(),
+        key=lambda x: x[1].get("created_at", 0),
+        reverse=True,
+    ):
+        if order.get("paid") or _order_expired(order):
+            continue
+        if _order_id_in_text(oid, text) and amount >= order.get("amount", 0):
+            if _match_order(txn, oid, order):
+                return oid, fp
 
     for oid, order in list(orders.items()):
         if _match_order(txn, oid, order):
-            return oid, tid or None
+            return oid, fp
+
     return None, None
 
 async def _sepay_get(params: dict | None = None) -> tuple[int, dict]:
@@ -389,12 +450,12 @@ async def fetch_key(package_id: str) -> str | None:
         log.error("fetch_key loi: %s", e)
         return None
 
-async def confirm_payment(order_id: str, txn_id: str | None = None):
+async def confirm_payment(order_id: str, txn_fp: str | None = None):
     order = orders.get(order_id)
     if not order or order.get("paid"):
         return
-    if txn_id and str(txn_id) in processed_txns:
-        log.info("Bo qua txn %s — da xu ly", txn_id)
+    if txn_fp and txn_fp in processed_txns:
+        log.info("Bo qua txn %s — da xu ly", txn_fp)
         return
 
     uid = order.get("user_id")
@@ -404,8 +465,8 @@ async def confirm_payment(order_id: str, txn_id: str | None = None):
 
     order["paid"] = True
     order["paid_at"] = time.time()
-    if txn_id:
-        processed_txns.add(str(txn_id))
+    if txn_fp:
+        processed_txns.add(str(txn_fp))
     _save_data()
 
     amount = order["amount"]
@@ -451,25 +512,69 @@ async def poll_sepay():
         return
 
     txns = data.get("transactions", [])
+    matched_any = False
     for txn in txns:
-        oid, tid = _find_order_for_txn(txn)
+        oid, fp = _find_order_for_txn(txn)
         if oid:
-            await confirm_payment(oid, tid)
+            matched_any = True
+            await confirm_payment(oid, fp)
+
+    if pending and not matched_any and txns:
+        t0 = txns[0]
+        log.info(
+            "Poll chua khop | pending=%s | txn moi amount=%s text=%.60s",
+            pending,
+            _get_txn_amount(t0),
+            _get_txn_text(t0),
+        )
+
+async def _parse_webhook_request(request: web.Request) -> dict:
+    ctype = (request.headers.get("Content-Type") or "").lower()
+    if "application/json" in ctype:
+        raw = await request.json()
+        return _unwrap_txn(raw) if isinstance(raw, dict) else {}
+    if "multipart/form-data" in ctype or "application/x-www-form-urlencoded" in ctype:
+        post = await request.post()
+        flat = {k: (v[0] if isinstance(v, (list, tuple)) else v) for k, v in post.items()}
+        return _unwrap_txn(flat)
+    text = await request.text()
+    if not text:
+        return {}
+    try:
+        raw = json.loads(text)
+        return _unwrap_txn(raw) if isinstance(raw, dict) else {}
+    except json.JSONDecodeError:
+        log.warning("Webhook body khong parse duoc: %s", text[:300])
+        return {}
 
 async def handle_health(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "service": "ducduy-boutique"})
 
 async def handle_webhook(request: web.Request) -> web.Response:
     try:
-        body = await request.json()
+        body = _unwrap_txn(await _parse_webhook_request(request))
         amt = _get_txn_amount(body)
-        log.info("Webhook: id=%s amount=%s type=%s", body.get("id"), amt, body.get("transferType"))
+        text = _get_txn_text(body)
+        log.info(
+            "Webhook: id=%s amount=%s type=%s | content=%.80s",
+            body.get("id"), amt, body.get("transferType"), text,
+        )
 
-        oid, tid = _find_order_for_txn(body)
+        oid, fp = _find_order_for_txn(body)
         if oid:
             log.info("Webhook khop don %s", oid)
-            await confirm_payment(oid, tid)
+            await confirm_payment(oid, fp)
             return web.json_response({"success": True})
+
+        pending = [
+            o for o, ord in orders.items()
+            if not ord.get("paid") and not _order_expired(ord)
+        ]
+        if pending:
+            log.warning(
+                "Webhook KHONG KHOP | amount=%s | pending=%s | text=%.100s",
+                amt, pending, text,
+            )
 
         return web.json_response({"success": True})
     except json.JSONDecodeError:
