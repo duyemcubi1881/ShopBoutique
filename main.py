@@ -619,7 +619,7 @@ async def _delete_ephemeral_later(app_id, token: str, message_id, delay: int):
     except Exception:
         pass
 
-@tasks.loop(seconds=10)
+@tasks.loop(seconds=30)
 async def poll_sepay():
     pending = [
         oid for oid, o in orders.items()
@@ -1233,19 +1233,9 @@ async def on_command_error(ctx: commands.Context, error: Exception):
         return
     log.error("Command error: %s", error, exc_info=error)
 
-_webhook_started = False
-
 @bot.event
 async def on_ready():
-    global _webhook_started
     log.info("Bot online: %s (ID: %d)", bot.user, bot.user.id)
-
-    if not _webhook_started:
-        try:
-            await start_webhook_server()
-            _webhook_started = True
-        except Exception as e:
-            log.error("Webhook loi: %s", e)
 
     if not poll_sepay.is_running():
         poll_sepay.start()
@@ -1261,4 +1251,8 @@ async def on_ready():
     else:
         log.info("API Legit: %s | Aimbot: %s", API_LEGIT_BASE, API_AIMBOT_BASE)
 
-bot.run(TOKEN)
+async def main():
+    await start_webhook_server()
+    await bot.start(TOKEN)
+
+asyncio.run(main())
