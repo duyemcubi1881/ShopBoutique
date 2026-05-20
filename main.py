@@ -51,9 +51,9 @@ WEBHOOK_PORT   = int(os.getenv("PORT") or os.getenv("WEBHOOK_PORT") or "8080")
 SHOP_THUMBNAIL = _clean_env(os.getenv("SHOP_THUMBNAIL", ""))
 SUPPORT_TEXT   = _clean_env(os.getenv("SUPPORT_TEXT", "Ticket server · DM admin"))
 DEPOSIT_MSG_TTL = int(os.getenv("DEPOSIT_MSG_TTL", "120"))
-# 0 = chuyển đúng số (3000). 1 = mỗi đơn +1..999đ (3001, 3002...) tránh trùng đơn.
-DEPOSIT_UNIQUE_SUFFIX = os.getenv("DEPOSIT_UNIQUE_SUFFIX", "0").strip().lower() in (
-    "1", "true", "yes", "on",
+# 1 (mac dinh) = moi don +1..999d de tranh khop GD cu cung so tien. 0 = chuyen dung so tron.
+DEPOSIT_UNIQUE_SUFFIX = os.getenv("DEPOSIT_UNIQUE_SUFFIX", "1").strip().lower() not in (
+    "0", "false", "no", "off",
 )
 
 # Theme — Boutique Nexus (không dùng layout shop clone)
@@ -500,11 +500,12 @@ def _order_id_in_text(oid: str, text: str) -> bool:
 def _get_txn_date(txn: dict) -> str:
     return str(txn.get("transactionDate") or txn.get("transaction_date") or "")
 
-def _txn_timestamp(txn: dict, order_created: float = 0) -> float:
-    """Parse thoi gian giao dich — SePay co the gui gio VN hoac UTC."""
-    s = _get_txn_date(txn)
+def _txn_timestamp_or_none(txn: dict) -> float | None:
+    """Thoi gian GD tu SePay. None neu khong parse duoc."""
+    s = _get_txn_date(txn).strip()
     if not s:
-        return time.time()
+        return None
+    s = s[:19]
     candidates: list[float] = []
     for tz in (VN_TZ, datetime.timezone.utc):
         try:
@@ -513,10 +514,22 @@ def _txn_timestamp(txn: dict, order_created: float = 0) -> float:
         except Exception:
             pass
     if not candidates:
-        return time.time()
-    if order_created > 0:
-        return min(candidates, key=lambda t: abs(t - order_created))
-    return candidates[0]
+        return None
+    return min(candidates)
+
+def _txn_matches_order_time(txn: dict, order: dict) -> bool:
+    """GD phai xay ra SAU khi tao don (tranh khop lai GD 2k/5k cu trong SePay)."""
+    created = float(order.get("created_at") or 0)
+    if created <= 0:
+        return True
+    ts = _txn_timestamp_or_none(txn)
+    if ts is None:
+        return False
+    if ts < created - 120:
+        return False
+    if ts > created + ORDER_EXPIRE + 600:
+        return False
+    return True
 
 def _txn_fingerprint(txn: dict) -> str:
     tid = str(txn.get("id") or "").strip()
@@ -549,7 +562,7 @@ def _pending_orders() -> list[tuple[str, dict]]:
     ]
 
 def _find_order_for_txn(txn: dict) -> tuple[str | None, str | None]:
-    """Khớp theo số tiền CK unique; fallback mã NAP / đúng base khi chỉ 1 đơn chờ."""
+    """Khớp đơn — bắt buộc GD sau lúc tạo đơn; ưu tiên mã NAP trong nội dung CK."""
     fp = _txn_fingerprint(txn)
     if fp in processed_txns:
         return None, None
@@ -568,34 +581,41 @@ def _find_order_for_txn(txn: dict) -> tuple[str | None, str | None]:
     for oid, order in sorted(pending, key=lambda x: x[1].get("created_at", 0), reverse=True):
         if not _order_id_in_text(oid, text):
             continue
+        ts = _txn_timestamp_or_none(txn)
+        if ts is not None and not _txn_matches_order_time(txn, order):
+            continue
         need = _order_transfer_amount(order)
         credit = _order_credit_amount(order)
         if amount >= need or amount >= credit:
             log.info("Khop MA DON %s | CK %d | +%d | %.40s", oid, amount, credit, text)
             return oid, fp
 
-    # Khớp chính xác số tiền phải chuyển (unique)
+    # Khớp theo số tiền — BẮT BUỘC GD sau khi tạo đơn (tránh dùng lại GD 2k cũ)
     for oid, order in sorted(pending, key=lambda x: x[1].get("created_at", 0), reverse=True):
         need = _order_transfer_amount(order)
         if amount != need:
             continue
+        if not _txn_matches_order_time(txn, order):
+            continue
         credit = _order_credit_amount(order)
         if _order_id_in_text(oid, text):
-            log.info("Khop UNIQUE+MA %s | CK %d | +%d | %.40s", oid, need, credit, text)
+            log.info("Khop SO TIEN+MA %s | CK %d | +%d | %.40s", oid, need, credit, text)
         else:
-            log.info("Khop UNIQUE %s | CK %d | +%d | %.40s", oid, need, credit, text)
+            log.info("Khop SO TIEN %s | CK %d | +%d | %.40s", oid, need, credit, text)
         return oid, fp
 
-    # Fallback: chuyển đúng số base (bỏ vài đồng unique) — chỉ khi 1 đơn chờ cùng mức
+    # Fallback base amount — vẫn phải sau lúc tạo đơn
     for oid, order in sorted(pending, key=lambda x: x[1].get("created_at", 0), reverse=True):
         credit = _order_credit_amount(order)
         need = _order_transfer_amount(order)
         if amount != credit or credit == need:
             continue
+        if not _txn_matches_order_time(txn, order):
+            continue
         same = [o for o, ord in pending if _order_credit_amount(ord) == credit]
         if len(same) == 1 and same[0][0] == oid:
             log.warning(
-                "Khop BASE (sai so unique) %s | CK %d thay vi %d | +%d",
+                "Khop BASE %s | CK %d thay vi %d | +%d",
                 oid, amount, need, credit,
             )
             return oid, fp
