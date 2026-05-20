@@ -42,10 +42,6 @@ ACCOUNT_NAME   = _clean_env(os.getenv("ACCOUNT_NAME", "DUCDUY BOUTIQUE"))
 BANK_DISPLAY   = _clean_env(os.getenv("BANK_DISPLAY", "MSB Bank"))
 SEPAY_TOKEN    = _clean_env(os.getenv("SEPAY_TOKEN") or os.getenv("SEPAY_API_KEY"))
 ORDER_EXPIRE   = int(os.getenv("ORDER_EXPIRE_MINUTES", "15")) * 60
-API_AIMBOT_BASE = _clean_env(os.getenv("API_AIMBOT_BASE", "https://aovduy.onrender.com")).rstrip("/")
-API_LEGIT_BASE  = _clean_env(os.getenv("API_LEGIT_BASE", "https://api2-inoj.onrender.com")).rstrip("/")
-API_ADMIN_USER  = _clean_env(os.getenv("API_ADMIN_USER"))
-API_ADMIN_PASS  = _clean_env(os.getenv("API_ADMIN_PASS"))
 PUBLIC_URL     = _clean_env(
     os.getenv("PUBLIC_URL")
     or os.getenv("RENDER_EXTERNAL_URL")
@@ -130,7 +126,6 @@ PRODUCTS = {
         "label": "Legit Drag",
         "emoji": "🎯",
         "tagline": "Ghim Ngực - Kéo Tâm Dễ Dàng - Phù Hợp Chơi Chay",
-        "server": "INOJ Cloud",
         "accent": C_LEGIT,
         "packages": [
             {"id": "ld_3h",  "name": "Legit Drag 3 Gio",   "price":   3_000, "duration": "3 gio",   "days": 1},
@@ -144,7 +139,6 @@ PRODUCTS = {
         "label": "Aimbot Head",
         "emoji": "🔫",
         "tagline": "Ghim Đầu Chặt - Không Lỗi Dame - Dễ Sử Dụng",
-        "server": "AOV Duy Node",
         "accent": C_AIMBOT,
         "packages": [
             {"id": "ah_3h",  "name": "Aimbot Head 3 Gio",   "price":   5_000, "duration": "3 gio",   "days": 1},
@@ -164,11 +158,132 @@ for _pk, _pv in PRODUCTS.items():
 def _min_price(product_key: str) -> int:
     return min(p["price"] for p in PRODUCTS[product_key]["packages"])
 
-def _api_base(product_key: str) -> str:
-    return API_LEGIT_BASE if product_key == "legit_drag" else API_AIMBOT_BASE
+# ══════════════════════════════════════════
+# KHO KEY (FILE) — keys/<ma_goi>.txt, moi dong 1 key
+# ══════════════════════════════════════════
+
+KEYS_DIR = Path(__file__).resolve().parent / "keys"
+_key_file_lock = asyncio.Lock()
+
+def _init_keys_dir():
+    KEYS_DIR.mkdir(parents=True, exist_ok=True)
+    for pkg_id in PKG:
+        p = KEYS_DIR / (pkg_id + ".txt")
+        if not p.exists():
+            p.write_text(
+                "# File key cho goi: " + pkg_id + "\n"
+                "# Moi dong 1 key. Dong # la ghi chu.\n",
+                encoding="utf-8",
+            )
+
+def _key_file_path(pkg_id: str) -> Path:
+    return KEYS_DIR / (pkg_id + ".txt")
+
+def _read_key_lines(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return [ln.strip() for ln in lines if ln.strip() and not ln.strip().startswith("#")]
+
+def count_keys(pkg_id: str) -> int:
+    return len(_read_key_lines(_key_file_path(pkg_id)))
+
+def count_keys_product(product_key: str) -> int:
+    return sum(count_keys(p["id"]) for p in PRODUCTS[product_key]["packages"])
+
+def count_keys_total() -> int:
+    return sum(count_keys(pid) for pid in PKG)
+
+def _pop_key_sync(pkg_id: str) -> str | None:
+    path = _key_file_path(pkg_id)
+    keys = _read_key_lines(path)
+    if not keys:
+        return None
+    key = keys[0]
+    rest = keys[1:]
+    path.write_text(
+        ("\n".join(rest) + "\n") if rest else "# Het key — them key moi vao file nay\n",
+        encoding="utf-8",
+    )
+    log.info("Lay key %s | con lai %d", pkg_id, len(rest))
+    return key
+
+async def take_key(pkg_id: str) -> str | None:
+    async with _key_file_lock:
+        return await asyncio.to_thread(_pop_key_sync, pkg_id)
+
+def _restore_keys_sync(pkg_id: str, keys: list[str]) -> None:
+    if not keys:
+        return
+    path = _key_file_path(pkg_id)
+    existing = _read_key_lines(path)
+    path.write_text("\n".join(keys + existing) + "\n", encoding="utf-8")
+    log.info("Hoan %d key vao %s", len(keys), pkg_id)
+
+async def restore_keys(pkg_id: str, keys: list[str]) -> None:
+    async with _key_file_lock:
+        await asyncio.to_thread(_restore_keys_sync, pkg_id, keys)
+
+def stock_summary_text() -> str:
+    lines = []
+    for pk, pv in PRODUCTS.items():
+        parts = []
+        for p in pv["packages"]:
+            c = count_keys(p["id"])
+            icon = "🟢" if c > 5 else ("🟡" if c else "🔴")
+            parts.append(icon + " `" + p["duration"] + "`: **" + str(c) + "**")
+        total = count_keys_product(pk)
+        lines.append(pv["emoji"] + " **" + pv["label"] + "** — `" + str(total) + "` key\n" + " · ".join(parts))
+    lines.append("\n**Tổng kho:** `" + str(count_keys_total()) + "` key")
+    return "\n".join(lines)
+
+_init_keys_dir()
 
 def _fmt_vnd(n: int) -> str:
     return "{:,}".format(n) + "₫"
+
+HTTP_HEADERS = {
+    "User-Agent": "DucDuyBoutique-ShopBot/2.0",
+    "Accept": "application/json",
+}
+API_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=20)
+
+def _short_body(body: str, limit: int = 220) -> str:
+    t = re.sub(r"\s+", " ", (body or "")).strip()
+    if len(t) > limit:
+        return t[:limit] + "..."
+    return t
+
+def _is_cloudflare_html(body: str) -> bool:
+    b = (body or "").lower()
+    return "cloudflare" in b and ("cf-ray" in b or "error code" in b or "<!doctype html" in b)
+
+def _cf_ray_from_body(body: str) -> str:
+    m = re.search(r"Ray ID[:\s]*<?[^>]*>?([a-f0-9]{16})", body or "", re.I)
+    return m.group(1) if m else ""
+
+def _log_http_fail(label: str, url: str, status: int, body: str):
+    if _is_cloudflare_html(body):
+        ray = _cf_ray_from_body(body)
+        log.error(
+            "%s | %s | HTTP %s | CLOUDFLARE (Ray %s) — API dang ngu/qua tai. "
+            "Doi 30-60s hoac mo URL tren trinh duyet de danh thuc Render.",
+            label, url, status, ray or "?",
+        )
+    elif status in (502, 503, 520, 521, 522, 524):
+        log.error("%s | %s | HTTP %s | Server tam thoi loi: %s", label, url, status, _short_body(body))
+    else:
+        log.error("%s | %s | HTTP %s | %s", label, url, status, _short_body(body))
+
+async def _read_http(resp: aiohttp.ClientResponse) -> tuple[str, dict]:
+    body = await resp.text()
+    data: dict = {}
+    if body.strip().startswith("{"):
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            pass
+    return body, data
 
 # ══════════════════════════════════════════
 # HAM TIEN ICH
@@ -197,6 +312,43 @@ def make_order_id() -> str:
         oid = "NAP" + str(int(time.time())) + str(n)
     return oid
 
+def _order_transfer_amount(order: dict) -> int:
+    """Số tiền bắt buộc phải chuyển (unique)."""
+    return int(order.get("transfer_amount") or order.get("amount") or 0)
+
+def _order_credit_amount(order: dict) -> int:
+    """Số tiền thực cộng vào ví."""
+    return int(order.get("base_amount") or order.get("amount") or 0)
+
+def _pending_transfer_amounts() -> set[int]:
+    s = set()
+    for o in orders.values():
+        if not o.get("paid") and not _order_expired(o):
+            s.add(_order_transfer_amount(o))
+    return s
+
+def _alloc_unique_transfer_amount(base_amount: int) -> int:
+    """Mỗi đơn +1..999đ để nhiều người nạp cùng mức vẫn khớp chính xác."""
+    used = _pending_transfer_amounts()
+    for offset in range(1, 1000):
+        t = base_amount + offset
+        if t not in used:
+            return t
+    return base_amount + random.randint(1000, 9999)
+
+def create_deposit_order(user_id: int, base_amount: int) -> tuple[str, int, int]:
+    order_id = make_order_id()
+    transfer_amount = _alloc_unique_transfer_amount(base_amount)
+    orders[order_id] = {
+        "user_id":         user_id,
+        "base_amount":     base_amount,
+        "transfer_amount": transfer_amount,
+        "amount":          transfer_amount,
+        "paid":            False,
+        "created_at":      time.time(),
+    }
+    return order_id, base_amount, transfer_amount
+
 def _order_expired(order: dict) -> bool:
     created = order.get("created_at", 0)
     return (time.time() - created) > ORDER_EXPIRE
@@ -213,18 +365,22 @@ def build_qr_url(amount: int, order_id: str) -> str:
         + "&accountName=" + name
     )
 
-def build_deposit_embed(amount: int, order_id: str) -> discord.Embed:
+def build_deposit_embed(base_amount: int, transfer_amount: int, order_id: str) -> discord.Embed:
     e = discord.Embed(
         title="💳  Thông tin nạp tiền",
-        description="Chuyển khoản **đúng** thông tin bên dưới — bot sẽ **tự động cộng tiền** khi nhận được.",
+        description=(
+            "⚠️ Phải chuyển **đúng số tiền bên dưới** (có thêm vài đồng để hệ thống nhận diện đơn của bạn).\n"
+            "Sau khi nhận tiền, bot cộng **`{:,}` VNĐ** vào ví.".format(base_amount)
+        ),
         color=C_NEXUS,
     )
     e.add_field(
         name="💵  Thông tin nạp",
         value=(
-            "**Số tiền cần nạp:** `" + "{:,}".format(amount) + " VNĐ`\n"
-            + "**Mã đơn hàng:** `" + order_id + "`\n"
-            + "**Nội dung chuyển khoản:** `" + order_id + "`"
+            "**Số tiền PHẢI chuyển:** `" + "{:,}".format(transfer_amount) + " VNĐ`\n"
+            + "**Sẽ cộng vào ví:** `" + "{:,}".format(base_amount) + " VNĐ`\n"
+            + "**Mã đơn:** `" + order_id + "`\n"
+            + "**Nội dung CK:** `" + order_id + "`"
         ),
         inline=False,
     )
@@ -242,13 +398,13 @@ def build_deposit_embed(amount: int, order_id: str) -> discord.Embed:
         name="💡  Hướng dẫn",
         value=(
             "1️⃣  Quét **mã QR** bên dưới *(khuyến nghị)* hoặc chuyển thủ công\n"
-            + "2️⃣  Nhập **đúng số tiền:** `" + "{:,}".format(amount) + " VNĐ`\n"
-            + "3️⃣  Nhập **đúng nội dung:** `" + order_id + "` — không thêm bớt ký tự\n"
-            + "4️⃣  Hệ thống **tự cộng tiền** trong ~1–2 phút sau khi ngân hàng ghi nhận"
+            + "2️⃣  Nhập **đúng số tiền:** `" + "{:,}".format(transfer_amount) + " VNĐ` *(không làm tròn)*\n"
+            + "3️⃣  Nhập **nội dung:** `" + order_id + "`\n"
+            + "4️⃣  Bot tự cộng **`{:,}` VNĐ** vào ví trong ~1–2 phút".format(base_amount)
         ),
         inline=False,
     )
-    e.set_image(url=build_qr_url(amount, order_id))
+    e.set_image(url=build_qr_url(transfer_amount, order_id))
     e.set_footer(
         text="ducduy boutique  •  Hết hạn sau "
         + str(ORDER_EXPIRE // 60)
@@ -264,8 +420,35 @@ def _parse_amount(val) -> int:
         return 0
 
 def _get_txn_amount(txn: dict) -> int:
-    val = txn.get("transferAmount") or txn.get("amount_in") or txn.get("amount") or 0
-    return _parse_amount(val)
+    """SePay list API: amount_in (string). Webhook: transferAmount."""
+    for key in ("amount_in", "transferAmount", "amount", "transfer_amount"):
+        val = txn.get(key)
+        if val is None or val == "":
+            continue
+        n = _parse_amount(val)
+        if n > 0:
+            return n
+    return 0
+
+def _txn_matches_bank(txn: dict) -> bool:
+    if not BANK_NUMBER:
+        return True
+    acct = re.sub(r"\D", "", str(txn.get("account_number") or ""))
+    want = re.sub(r"\D", "", str(BANK_NUMBER))
+    if not acct:
+        return True
+    return acct == want or acct.endswith(want) or want.endswith(acct)
+
+def _sepay_transactions(data: dict) -> list[dict]:
+    if not isinstance(data, dict):
+        return []
+    txns = data.get("transactions")
+    if isinstance(txns, list):
+        return txns
+    inner = data.get("data")
+    if isinstance(inner, dict) and isinstance(inner.get("transactions"), list):
+        return inner["transactions"]
+    return []
 
 def _unwrap_txn(body) -> dict:
     if not isinstance(body, dict):
@@ -339,91 +522,87 @@ def _txn_fingerprint(txn: dict) -> str:
     return "fp:" + _get_txn_date(txn) + "|" + str(_get_txn_amount(txn)) + "|" + _get_txn_text(txn)[:80]
 
 def _is_incoming(txn: dict) -> bool:
+    """SePay list API thường không có transferType — dùng amount_in."""
     t = txn.get("transferType")
-    if t is not None:
-        return str(t).lower() == "in"
+    if t is not None and str(t).lower() == "out":
+        return False
+    if t is not None and str(t).lower() == "in":
+        return True
     try:
-        ain = float(txn.get("amount_in") or 0)
-        aout = float(txn.get("amount_out") or 0)
-        return ain > 0 and aout == 0
+        if float(txn.get("amount_in") or 0) > 0:
+            return True
     except (TypeError, ValueError):
-        return _get_txn_amount(txn) > 0
+        pass
+    return _get_txn_amount(txn) > 0
 
-def _pending_same_amount(amount: int) -> list[str]:
+def _pending_orders() -> list[tuple[str, dict]]:
     return [
-        oid
+        (oid, o)
         for oid, o in orders.items()
-        if not o.get("paid") and o.get("amount") == amount and not _order_expired(o)
+        if not o.get("paid") and not _order_expired(o)
     ]
 
-def _match_order(txn: dict, oid: str, order: dict) -> bool:
-    if order.get("paid") or _order_expired(order):
-        return False
-    if not _is_incoming(txn):
-        return False
-
-    amount       = _get_txn_amount(txn)
-    order_amount = order["amount"]
-    if amount <= 0:
-        return False
-
-    all_text     = _get_txn_text(txn)
-    txn_date_str = _get_txn_date(txn)
-
-    # Ưu tiên: mã đơn trong nội dung CK (fuzzy) + đủ số tiền
-    if _order_id_in_text(oid, all_text):
-        if amount >= order_amount:
-            log.info("Khop MA DON %s | amount %d >= %d | text=%.60s", oid, amount, order_amount, all_text)
-            return True
-        log.warning("Ma don %s trong CK nhung thieu tien: %d < %d", oid, amount, order_amount)
-        return False
-
-    # Dự phòng: đúng số tiền (SePay thường KHÔNG gửi mã NAP trong content — MSB/NAPAS)
-    if amount != order_amount:
-        return False
-
-    same = _pending_same_amount(amount)
-    # Chỉ 1 đơn chờ cùng số tiền → khớp luôn (an toàn)
-    if len(same) == 1 and oid == same[0]:
-        log.info(
-            "Khop AMOUNT (1 don cho) %s | %d | sepay_text=%.50s",
-            oid, order_amount, all_text,
-        )
-        return True
-
-    order_created = order.get("created_at", 0)
-    txn_ts = _txn_timestamp(txn, order_created)
-    if oid in same and txn_ts >= (order_created - 300) and (txn_ts - order_created) <= 3600:
-        log.info("Khop AMOUNT+TIME don %s | %d VND", oid, order_amount)
-        return True
-
-    return False
-
 def _find_order_for_txn(txn: dict) -> tuple[str | None, str | None]:
-    """Tra don khop; tra (order_id, fingerprint)."""
+    """Khớp theo số tiền CK unique; fallback mã NAP / đúng base khi chỉ 1 đơn chờ."""
     fp = _txn_fingerprint(txn)
     if fp in processed_txns:
         return None, None
 
-    # Ưu tiên đơn có mã trong nội dung CK
-    text = _get_txn_text(txn)
-    amount = _get_txn_amount(txn)
-    for oid, order in sorted(
-        orders.items(),
-        key=lambda x: x[1].get("created_at", 0),
-        reverse=True,
-    ):
-        if order.get("paid") or _order_expired(order):
-            continue
-        if _order_id_in_text(oid, text) and amount >= order.get("amount", 0):
-            if _match_order(txn, oid, order):
-                return oid, fp
+    if not _is_incoming(txn):
+        return None, None
 
-    for oid, order in list(orders.items()):
-        if _match_order(txn, oid, order):
+    amount = _get_txn_amount(txn)
+    if amount <= 0:
+        return None, None
+
+    text = _get_txn_text(txn)
+    pending = _pending_orders()
+
+    # Ưu tiên: mã NAP trong nội dung CK
+    for oid, order in sorted(pending, key=lambda x: x[1].get("created_at", 0), reverse=True):
+        if not _order_id_in_text(oid, text):
+            continue
+        need = _order_transfer_amount(order)
+        credit = _order_credit_amount(order)
+        if amount >= need or amount >= credit:
+            log.info("Khop MA DON %s | CK %d | +%d | %.40s", oid, amount, credit, text)
+            return oid, fp
+
+    # Khớp chính xác số tiền phải chuyển (unique)
+    for oid, order in sorted(pending, key=lambda x: x[1].get("created_at", 0), reverse=True):
+        need = _order_transfer_amount(order)
+        if amount != need:
+            continue
+        credit = _order_credit_amount(order)
+        if _order_id_in_text(oid, text):
+            log.info("Khop UNIQUE+MA %s | CK %d | +%d | %.40s", oid, need, credit, text)
+        else:
+            log.info("Khop UNIQUE %s | CK %d | +%d | %.40s", oid, need, credit, text)
+        return oid, fp
+
+    # Fallback: chuyển đúng số base (bỏ vài đồng unique) — chỉ khi 1 đơn chờ cùng mức
+    for oid, order in sorted(pending, key=lambda x: x[1].get("created_at", 0), reverse=True):
+        credit = _order_credit_amount(order)
+        need = _order_transfer_amount(order)
+        if amount != credit or credit == need:
+            continue
+        same = [o for o, ord in pending if _order_credit_amount(ord) == credit]
+        if len(same) == 1 and same[0][0] == oid:
+            log.warning(
+                "Khop BASE (sai so unique) %s | CK %d thay vi %d | +%d",
+                oid, amount, need, credit,
+            )
             return oid, fp
 
     return None, None
+
+async def _fetch_sepay_transactions(limit: int = 80) -> tuple[int, list[dict]]:
+    """Lấy GD SePay — không lọc account_number trên API (tránh lọc sai format MSB)."""
+    status, data = await _sepay_get({"limit": limit})
+    if status != 200:
+        return status, []
+    txns = [t for t in _sepay_transactions(data) if _txn_matches_bank(t)]
+    return status, txns
 
 async def _sepay_get(params: dict | None = None) -> tuple[int, dict]:
     """Goi SePay API; tra (status, json)."""
@@ -433,86 +612,37 @@ async def _sepay_get(params: dict | None = None) -> tuple[int, dict]:
     if _sepay_auth_failed:
         return 401, {}
 
-    headers = {"Authorization": "Bearer " + SEPAY_TOKEN}
+    headers = {**HTTP_HEADERS, "Authorization": "Bearer " + SEPAY_TOKEN}
+    url = "https://my.sepay.vn/userapi/transactions/list"
     try:
-        async with aiohttp.ClientSession() as s:
+        async with aiohttp.ClientSession(headers=HTTP_HEADERS) as s:
             async with s.get(
-                "https://my.sepay.vn/userapi/transactions/list",
+                url,
                 headers=headers,
                 params=params or {"limit": 20},
-                timeout=aiohttp.ClientTimeout(total=12),
+                timeout=API_TIMEOUT,
             ) as r:
-                body = await r.text()
+                body, data = await _read_http(r)
                 if r.status == 401:
                     _sepay_auth_failed = True
-                    log.error(
-                        "SePay HTTP 401 — SEPAY_TOKEN sai hoac het han. "
-                        "Vao my.sepay.vn -> API -> tao token moi -> cap nhat Environment tren Render. Body: %s",
-                        body[:200],
-                    )
+                    log.error("SePay 401 — kiem tra SEPAY_TOKEN tren Render. %s", _short_body(body))
                     return 401, {}
-                if r.status != 200:
-                    log.warning("SePay HTTP %s: %s", r.status, body[:200])
+                if r.status != 200 or _is_cloudflare_html(body):
+                    if _is_cloudflare_html(body):
+                        _log_http_fail("SePay", url, r.status, body)
+                    else:
+                        log.warning("SePay HTTP %s: %s", r.status, _short_body(body))
                     return r.status, {}
-                try:
-                    return r.status, json.loads(body)
-                except json.JSONDecodeError:
-                    return r.status, {}
+                _sepay_auth_failed = False
+                if not data and body.strip():
+                    log.warning("SePay tra khong phai JSON: %s", _short_body(body))
+                return r.status, data
+    except asyncio.TimeoutError:
+        log.error("SePay timeout — thu lai sau hoac kiem tra mang")
+        return 0, {}
     except Exception as e:
         log.error("SePay request loi: %s", e)
         return 0, {}
-
-async def fetch_key(package_id: str) -> str | None:
-    pkg = PKG.get(package_id)
-    if not pkg:
-        return None
-    if not API_ADMIN_USER or not API_ADMIN_PASS:
-        log.error("Chua cau hinh API_ADMIN_USER / API_ADMIN_PASS")
-        return None
-
-    pk = pkg["product_key"]
-    base = _api_base(pk)
-    days = pkg["days"]
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            login_resp = await session.post(
-                base + "/api/login",
-                json={"username": API_ADMIN_USER, "password": API_ADMIN_PASS},
-                timeout=aiohttp.ClientTimeout(total=25),
-            )
-            if login_resp.status != 200:
-                body = await login_resp.text()
-                log.error("[%s] login %s fail %s: %s", pk, base, login_resp.status, body[:200])
-                return None
-
-            log.info("[%s] login OK @ %s → createkey %sd", pk, base, days)
-            key_resp = await session.post(
-                base + "/api/createkey",
-                json={
-                    "days": days,
-                    "key_type": "single_device",
-                    "created_by": "BoutiqueNexus",
-                    "note": "discord-" + package_id,
-                },
-                timeout=aiohttp.ClientTimeout(total=25),
-            )
-            try:
-                data = await key_resp.json()
-            except Exception:
-                data = {}
-            if key_resp.status in (200, 201):
-                key = data.get("key") or data.get("license") or data.get("data")
-                if isinstance(key, dict):
-                    key = key.get("key")
-                if key:
-                    log.info("[%s] key OK: %s", pk, str(key)[:12] + "...")
-                    return str(key)
-            log.error("[%s] createkey %s: %s", pk, key_resp.status, data)
-            return None
-    except Exception as e:
-        log.error("fetch_key [%s] loi: %s", package_id, e)
-        return None
 
 async def confirm_payment(order_id: str, txn_fp: str | None = None):
     order = orders.get(order_id)
@@ -533,9 +663,12 @@ async def confirm_payment(order_id: str, txn_fp: str | None = None):
         processed_txns.add(str(txn_fp))
     _save_data()
 
-    amount = order["amount"]
-    bal    = add_balance(uid, amount)
-    log.info("XAC NHAN %s | +%s | user %s | du %s", order_id, amount, uid, bal)
+    credit = _order_credit_amount(order)
+    bal    = add_balance(uid, credit)
+    log.info(
+        "XAC NHAN %s | CK %d | +%d | user %s | du %s",
+        order_id, _order_transfer_amount(order), credit, uid, bal,
+    )
 
     try:
         user = await bot.fetch_user(uid)
@@ -544,7 +677,7 @@ async def confirm_payment(order_id: str, txn_fp: str | None = None):
             description="Giao dịch đã được xác nhận tự động.",
             color=0x2ECC71,
         )
-        embed.add_field(name="💵  Đã nạp", value="`" + "{:,}".format(amount) + " VNĐ`", inline=True)
+        embed.add_field(name="💵  Đã nạp", value="`" + "{:,}".format(credit) + " VNĐ`", inline=True)
         embed.add_field(name="💰  Số dư", value="`" + "{:,}".format(bal) + " VNĐ`", inline=True)
         embed.add_field(name="🧾  Mã đơn", value="`" + order_id + "`", inline=False)
         embed.add_field(
@@ -557,7 +690,7 @@ async def confirm_payment(order_id: str, txn_fp: str | None = None):
     except Exception as e:
         log.warning("Khong DM duoc user %s: %s", uid, e)
 
-    await _replace_deposit_message(order_id, amount, bal)
+    await _replace_deposit_message(order_id, credit, bal)
 
 def _deposit_success_embed(amount: int, balance: int) -> discord.Embed:
     e = discord.Embed(
@@ -614,25 +747,41 @@ async def _delete_ephemeral_later(app_id, token: str, message_id, delay: int):
     except Exception:
         pass
 
+_poll_warned_no_token = False
+_poll_last_diag = 0.0
+
 @tasks.loop(seconds=10)
 async def poll_sepay():
-    pending = [
-        oid for oid, o in orders.items()
-        if not o.get("paid") and not _order_expired(o)
-    ]
+    global _poll_warned_no_token, _poll_last_diag
+    pending = [oid for oid, _ in _pending_orders()]
     if not pending:
         return
-    if not SEPAY_TOKEN or _sepay_auth_failed:
+
+    if not SEPAY_TOKEN:
+        if not _poll_warned_no_token:
+            _poll_warned_no_token = True
+            log.error(
+                "SEPAY_TOKEN chua cau hinh — khong the tu cong tien! "
+                "Them SEPAY_TOKEN vao Render Environment (my.sepay.vn -> API)."
+            )
         return
 
-    params = {"limit": 80}
-    if BANK_NUMBER:
-        params["account_number"] = BANK_NUMBER
-    status, data = await _sepay_get(params)
+    if _sepay_auth_failed:
+        now = time.time()
+        if now - _poll_last_diag >= 60:
+            _poll_last_diag = now
+            log.warning("Poll dung — SEPAY 401, cap nhat SEPAY_TOKEN tren Render")
+        return
+
+    status, txns = await _fetch_sepay_transactions(80)
+    now = time.time()
+
     if status != 200:
+        if now - _poll_last_diag >= 30:
+            _poll_last_diag = now
+            log.warning("SePay poll HTTP %s — don cho: %s", status, pending[:5])
         return
 
-    txns = data.get("transactions", [])
     matched_any = False
     for txn in txns:
         oid, fp = _find_order_for_txn(txn)
@@ -640,14 +789,34 @@ async def poll_sepay():
             matched_any = True
             await confirm_payment(oid, fp)
 
-    if pending and not matched_any and txns:
-        t0 = txns[0]
-        log.info(
-            "Poll chua khop | pending=%s | txn moi amount=%s text=%.60s",
-            pending,
-            _get_txn_amount(t0),
-            _get_txn_text(t0),
+    if matched_any:
+        return
+
+    if now - _poll_last_diag < 30:
+        return
+    _poll_last_diag = now
+
+    need_map = {o: _order_transfer_amount(orders[o]) for o in pending}
+    if not txns:
+        log.warning(
+            "Poll: SePay khong co GD (hoac sai tai khoan) | don cho=%s | can CK=%s",
+            pending[:5], need_map,
         )
+        return
+
+    t0 = txns[0]
+    log.info(
+        "Poll chua khop | don=%s | can=%s | txn moi=%s | text=%.50s",
+        pending[:5], need_map, _get_txn_amount(t0), _get_txn_text(t0),
+    )
+
+@poll_sepay.before_loop
+async def _poll_sepay_before():
+    await bot.wait_until_ready()
+
+@poll_sepay.error
+async def _poll_sepay_error(error: Exception):
+    log.error("poll_sepay loi: %s", error, exc_info=error)
 
 async def _parse_webhook_request(request: web.Request) -> dict:
     ctype = (request.headers.get("Content-Type") or "").lower()
@@ -736,15 +905,14 @@ class DepositModal(discord.ui.Modal, title="💳  Nạp tiền"):
                 "❌ Số tiền tối thiểu là **1.000 VNĐ**.", ephemeral=True
             )
 
-        order_id = make_order_id()
-        orders[order_id] = {
-            "user_id":    interaction.user.id,
-            "amount":     amount,
-            "paid":       False,
-            "created_at": time.time(),
-        }
+        order_id, base_amount, transfer_amount = create_deposit_order(
+            interaction.user.id, amount
+        )
         _save_data()
-        log.info("Tao don: %s | %s VND | user %s", order_id, amount, interaction.user.id)
+        log.info(
+            "Tao don: %s | CK %d | +%d | user %s",
+            order_id, transfer_amount, base_amount, interaction.user.id,
+        )
 
         if not BANK_NUMBER:
             return await interaction.response.send_message(
@@ -752,7 +920,7 @@ class DepositModal(discord.ui.Modal, title="💳  Nạp tiền"):
                 ephemeral=True,
             )
 
-        embed = build_deposit_embed(amount, order_id)
+        embed = build_deposit_embed(base_amount, transfer_amount, order_id)
         await interaction.response.send_message(embed=embed, ephemeral=True)
         try:
             msg = await interaction.original_response()
@@ -798,31 +966,49 @@ class BuyModal(discord.ui.Modal):
                 ephemeral=True,
             )
 
+        stock = count_keys(self.pkg_id)
+        if stock < qty:
+            return await interaction.response.send_message(
+                "❌ **Hết key cho gói này!**\n"
+                + "📦 Còn lại: **" + str(stock) + "** key · Bạn cần: **" + str(qty) + "**\n"
+                + "Liên hệ admin để nạp thêm key vào kho.",
+                ephemeral=True,
+            )
+
         pv = PRODUCTS[pkg["product_key"]]
         await interaction.response.defer(ephemeral=True)
         await interaction.edit_original_response(
             embed=discord.Embed(
-                title="⏳  Đang kết nối máy chủ license...",
-                description=(
-                    "Lane **" + pv["label"] + "** → `" + _api_base(pkg["product_key"]) + "`\n"
-                    "Vui lòng đợi vài giây."
-                ),
+                title="⏳  Đang lấy key từ kho...",
+                description="Gói **" + pkg["name"] + "** · `" + str(qty) + "` key",
                 color=pv["accent"],
             )
         )
 
-        deduct_balance(uid, total)
         keys_ok: list[str] = []
-        keys_err = 0
         for _ in range(qty):
-            k = await fetch_key(self.pkg_id)
+            k = await take_key(self.pkg_id)
             if k:
                 keys_ok.append(k)
             else:
-                keys_err += 1
+                break
 
-        if keys_err:
-            add_balance(uid, pkg["price"] * keys_err)
+        if len(keys_ok) < qty:
+            if keys_ok:
+                await restore_keys(self.pkg_id, keys_ok)
+            return await interaction.edit_original_response(
+                embed=discord.Embed(
+                    title="❌  Kho key thay đổi",
+                    description=(
+                        "Chỉ lấy được **" + str(len(keys_ok)) + "/" + str(qty) + "** key.\n"
+                        "Không trừ tiền — thử lại sau khi admin nạp kho."
+                    ),
+                    color=0xE74C3C,
+                ),
+                view=None,
+            )
+
+        deduct_balance(uid, total)
 
         new_bal = get_balance(uid)
         accent = pv["accent"]
@@ -831,14 +1017,9 @@ class BuyModal(discord.ui.Modal):
             "**" + pkg["name"] + "**\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             "⏱️ `" + pkg["duration"] + "`  ·  🔢 `" + str(len(keys_ok)) + "` key\n"
-            "💸 −`" + _fmt_vnd(pkg["price"] * len(keys_ok)) + "`  ·  💰 ví `" + _fmt_vnd(new_bal) + "`"
+            "💸 −`" + _fmt_vnd(pkg["price"] * len(keys_ok)) + "`  ·  💰 ví `" + _fmt_vnd(new_bal) + "`\n"
+            "📦 Còn trong kho: **" + str(count_keys(self.pkg_id)) + "** key"
         )
-        if keys_err:
-            receipt.add_field(
-                name="Hoàn tiền",
-                value="`" + str(keys_err) + "` key lỗi → +" + _fmt_vnd(pkg["price"] * keys_err),
-                inline=False,
-            )
         await interaction.edit_original_response(embed=receipt, view=None)
 
         if keys_ok:
@@ -856,8 +1037,7 @@ class BuyModal(discord.ui.Modal):
                     "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
                     "```\n"
                     + keys_block + "\n\n"
-                    "⏱️ **Hạn:** " + pkg["duration"] + "\n"
-                    "🛰️ **Node:** " + pv["server"] + "\n\n"
+                    "⏱️ **Hạn:** " + pkg["duration"] + "\n\n"
                     "⚠️ Không chia sẻ key · một thiết bị"
                 )
                 dm.set_footer(text="ducduy boutique · nexus")
@@ -871,36 +1051,30 @@ class BuyModal(discord.ui.Modal):
 
 # ══════════════════════════════════════════
 # UI — DUCDUY BOUTIQUE V2
-# FULL VIETNAMESE VERSION
 # ══════════════════════════════════════════
 
 def embed_nexus() -> discord.Embed:
     ld = PRODUCTS["legit_drag"]
     ah = PRODUCTS["aimbot_head"]
-
     e = discord.Embed(
         title="✦ DUCDUY BOUTIQUE",
         description=(
             "```ansi\n"
             "\u001b[1;35m Shop ducduy boutique \u001b[0m\n"
             "```\n"
-
             "╭・⚡ **Giao Key Tự Động**\n"
             "├・💳 **Nạp Tiền Siêu Nhanh**\n"
             "├・🔐 **Key Riêng Tư Bảo Mật**\n"
             "╰・🛰️ **Hệ Thống Hoạt Động 24/7**\n\n"
-
             "## 🎯 LEGIT DRAG\n"
-            f"> {ld['tagline']}\n"
-            f"> 💸 Từ **{_fmt_vnd(_min_price('legit_drag'))}**\n\n"
-
+            "> " + ld["tagline"] + "\n"
+            "> 💸 Từ **" + _fmt_vnd(_min_price("legit_drag")) + "**\n\n"
             "## 🔫 AIMBOT HEAD\n"
-            f"> {ah['tagline']}\n"
-            f"> 💸 Từ **{_fmt_vnd(_min_price('aimbot_head'))}**"
+            "> " + ah["tagline"] + "\n"
+            "> 💸 Từ **" + _fmt_vnd(_min_price("aimbot_head")) + "**"
         ),
         color=C_NEXUS,
     )
-
     e.add_field(
         name="🛒 Quy trình mua",
         value=(
@@ -913,13 +1087,16 @@ def embed_nexus() -> discord.Embed:
         ),
         inline=True,
     )
-
     e.add_field(
         name="📡 Hỗ trợ",
-        value=f"```fix\n{SUPPORT_TEXT}\n```",
+        value="```fix\n" + SUPPORT_TEXT + "\n```",
         inline=True,
     )
-
+    e.add_field(
+        name="📦 Tồn kho key",
+        value=stock_summary_text(),
+        inline=False,
+    )
     e.add_field(
         name="✨ Ưu điểm",
         value=(
@@ -930,63 +1107,41 @@ def embed_nexus() -> discord.Embed:
         ),
         inline=False,
     )
-
     if bot.user and bot.user.display_avatar:
-        e.set_author(
-            name="DUCDUY BOUTIQUE",
-            icon_url=bot.user.display_avatar.url,
-        )
-
+        e.set_author(name="DUCDUY BOUTIQUE", icon_url=bot.user.display_avatar.url)
     if SHOP_THUMBNAIL:
         e.set_image(url=SHOP_THUMBNAIL)
-
-    e.set_footer(
-        text="DUCDUY BOUTIQUE • HỆ THỐNG LICENSE",
-        icon_url=bot.user.display_avatar.url if bot.user else None,
-    )
-
+    foot_icon = bot.user.display_avatar.url if bot.user and bot.user.display_avatar else None
+    e.set_footer(text="DUCDUY BOUTIQUE • HỆ THỐNG LICENSE", icon_url=foot_icon)
     return e
-
 
 def embed_vault(product_key: str) -> discord.Embed:
     pv = PRODUCTS[product_key]
-
     package_lines = []
-
     for p in pv["packages"]:
+        c = count_keys(p["id"])
+        stock = "📦 `" + str(c) + "` key" if c else "🔴 **Hết hàng**"
         package_lines.append(
-            f"╭・⏳ **{p['duration']}**\n"
-            f"╰・💸 `{_fmt_vnd(p['price'])}`"
+            "╭・⏳ **" + p["duration"] + "**\n├・💸 `" + _fmt_vnd(p["price"]) + "`\n╰・" + stock
         )
-
     e = discord.Embed(
-        title=f"{pv['emoji']} KHO LICENSE {pv['label'].upper()}",
+        title=pv["emoji"] + " KHO LICENSE " + pv["label"].upper(),
         description=(
-            f"```ansi\n"
-            f"\u001b[1;36m{pv['tagline']}\u001b[0m\n"
-            f"```\n"
-
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"{chr(10).join(package_lines)}\n"
-            f"━━━━━━━━━━━━━━━━━━━\n\n"
-
-            f"⚡ Chọn gói bên dưới để tiếp tục mua."
+            "```ansi\n\u001b[1;36m" + pv["tagline"] + "\u001b[0m\n```\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            + "\n".join(package_lines) + "\n"
+            "━━━━━━━━━━━━━━━━━━━\n\n"
+            "⚡ Chọn gói bên dưới để tiếp tục mua."
         ),
         color=pv["accent"],
     )
-
     e.add_field(
         name="🔐 Hệ thống giao key",
-        value="Key sẽ được gửi tự động qua tin nhắn riêng.",
+        value="Key lấy từ kho file · gửi tự động qua DM · mỗi key chỉ dùng một lần",
         inline=False,
     )
-
-    e.set_footer(
-        text=f"DUCDUY BOUTIQUE • {product_key.upper()}",
-    )
-
+    e.set_footer(text="DUCDUY BOUTIQUE • " + product_key.upper())
     return e
-
 
 def embed_guide() -> discord.Embed:
     e = discord.Embed(
@@ -996,174 +1151,115 @@ def embed_guide() -> discord.Embed:
             "1. Chọn sản phẩm cần mua\n"
             "2. Chọn gói license\n"
             "3. Nạp tiền vào ví\n"
-            "4. Hệ thống tự tạo key\n"
+            "4. Hệ thống gửi key từ kho\n"
             "5. Nhận key qua DM\n"
             "```\n"
-
-            "⚠️ **LƯU Ý QUAN TRỌNG**\n"
+            "⚠️ **LƯU Ý**\n"
             "> Chuyển đúng số tiền\n"
-            "> Ghi đúng mã NAP\n"
-            "> Sai nội dung sẽ không cộng tự động"
+            "> Ghi đúng mã NAP (nếu có)\n"
+            "> Mỗi đơn có **số tiền CK riêng** (vd 6000→6003đ) — chuyển đúng số bot hiển thị"
         ),
         color=C_NEXUS,
     )
-
     e.add_field(
         name="💳 Hệ thống nạp tiền",
-        value=(
-            "• VietQR tự động\n"
-            "• Cộng tiền tức thì\n"
-            "• Hoạt động 24/7"
-        ),
+        value="• VietQR tự động\n• Cộng tiền tức thì\n• Hoạt động 24/7",
         inline=False,
     )
-
-    e.set_footer(text="DUCDUY BOUTIQUE • GUIDE PANEL")
-
+    e.set_footer(text="DUCDUY BOUTIQUE • GUIDE")
     return e
-
 
 class PackageSelect(discord.ui.Select):
     def __init__(self, product_key: str):
         pv = PRODUCTS[product_key]
-
-        options = []
-
+        opts = []
         for p in pv["packages"]:
-            options.append(
+            c = count_keys(p["id"])
+            desc = ("Con " + str(c) + " key") if c else "Het hang — lien he admin"
+            opts.append(
                 discord.SelectOption(
-                    label=f"{p['duration']} • {_fmt_vnd(p['price'])}",
+                    label=p["duration"] + " • " + _fmt_vnd(p["price"]),
                     value=p["id"],
-                    description=p["name"][:95],
-                    emoji="⚡"
+                    description=desc[:100],
+                    emoji="📦" if c else "🔴",
                 )
             )
-
         super().__init__(
             placeholder="⚡ Chọn gói license...",
             min_values=1,
             max_values=1,
-            options=options,
+            options=opts,
             row=0,
         )
-
         self.product_key = product_key
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(
-            BuyModal(self.values[0])
-        )
-
+        await interaction.response.send_modal(BuyModal(self.values[0]))
 
 class VaultView(discord.ui.View):
     def __init__(self, product_key: str):
         super().__init__(timeout=180)
-
         self.product_key = product_key
-
         self.add_item(PackageSelect(product_key))
 
-    @discord.ui.button(
-        label="Thoát",
-        emoji="⬅️",
-        style=discord.ButtonStyle.secondary,
-        row=1
-    )
+    @discord.ui.button(label="Thoát", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
     async def leave(self, interaction: discord.Interaction, _btn):
         await interaction.response.edit_message(
-            content=(
-                "```ansi\n"
-                "\u001b[1;31mĐã đóng kho license\u001b[0m\n"
-                "```"
-            ),
+            content="```ansi\n\u001b[1;31mĐã đóng kho license\u001b[0m\n```",
             embed=None,
             view=None,
         )
-
 
 class NexusHubView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="LEGIT DRAG",
-        emoji="🎯",
-        style=discord.ButtonStyle.success,
-        custom_id="nexus_vault_legit",
-        row=0,
+        label="LEGIT DRAG", emoji="🎯", style=discord.ButtonStyle.success,
+        custom_id="nexus_vault_legit", row=0,
     )
     async def open_legit(self, interaction: discord.Interaction, _btn):
         await interaction.response.send_message(
-            embed=embed_vault("legit_drag"),
-            view=VaultView("legit_drag"),
-            ephemeral=True,
+            embed=embed_vault("legit_drag"), view=VaultView("legit_drag"), ephemeral=True,
         )
 
     @discord.ui.button(
-        label="AIMBOT HEAD",
-        emoji="🔫",
-        style=discord.ButtonStyle.danger,
-        custom_id="nexus_vault_aimbot",
-        row=0,
+        label="AIMBOT HEAD", emoji="🔫", style=discord.ButtonStyle.danger,
+        custom_id="nexus_vault_aimbot", row=0,
     )
     async def open_aimbot(self, interaction: discord.Interaction, _btn):
         await interaction.response.send_message(
-            embed=embed_vault("aimbot_head"),
-            view=VaultView("aimbot_head"),
-            ephemeral=True,
+            embed=embed_vault("aimbot_head"), view=VaultView("aimbot_head"), ephemeral=True,
         )
 
     @discord.ui.button(
-        label="Nạp ví",
-        emoji="💳",
-        style=discord.ButtonStyle.primary,
-        custom_id="nexus_wallet",
-        row=1,
+        label="Nạp ví", emoji="💳", style=discord.ButtonStyle.primary,
+        custom_id="nexus_wallet", row=1,
     )
     async def wallet(self, interaction: discord.Interaction, _btn):
-        await interaction.response.send_modal(
-            DepositModal()
-        )
+        await interaction.response.send_modal(DepositModal())
 
     @discord.ui.button(
-        label="Số dư",
-        emoji="✨",
-        style=discord.ButtonStyle.secondary,
-        custom_id="nexus_balance",
-        row=1,
+        label="Số dư", emoji="✨", style=discord.ButtonStyle.secondary,
+        custom_id="nexus_balance", row=1,
     )
     async def balance(self, interaction: discord.Interaction, _btn):
         bal = get_balance(interaction.user.id)
-
         e = discord.Embed(
             title="✨ VÍ CỦA BẠN",
-            description=(
-                "```ansi\n"
-                f"\u001b[1;32m{_fmt_vnd(bal)}\u001b[0m\n"
-                "```"
-            ),
+            description="```ansi\n\u001b[1;32m" + _fmt_vnd(bal) + "\u001b[0m\n```",
             color=C_NEXUS,
         )
-
-        e.set_footer(text="Số dư được cập nhật theo thời gian thực")
-
-        await interaction.response.send_message(
-            embed=e,
-            ephemeral=True,
-        )
+        e.set_footer(text="Cập nhật theo thời gian thực")
+        await interaction.response.send_message(embed=e, ephemeral=True)
 
     @discord.ui.button(
-        label="Hướng dẫn",
-        emoji="📡",
-        style=discord.ButtonStyle.secondary,
-        custom_id="nexus_guide",
-        row=1,
+        label="Hướng dẫn", emoji="📡", style=discord.ButtonStyle.secondary,
+        custom_id="nexus_guide", row=1,
     )
     async def guide(self, interaction: discord.Interaction, _btn):
-        await interaction.response.send_message(
-            embed=embed_guide(),
-            ephemeral=True,
-        )
+        await interaction.response.send_message(embed=embed_guide(), ephemeral=True)
+
 # ══════════════════════════════════════════
 # LENH
 # ══════════════════════════════════════════
@@ -1210,8 +1306,10 @@ async def doncho(ctx: commands.Context):
         exp = ""
         if _order_expired(o):
             exp = " *(het han)*"
+        ck = _order_transfer_amount(o)
+        cr = _order_credit_amount(o)
         lines.append(
-            "`" + oid + "` — " + "{:,}".format(o["amount"]) + "đ — <@" + str(o["user_id"]) + ">" + exp
+            "`" + oid + "` CK `{:,}` → +`{:,}`đ — <@{}>{}".format(ck, cr, o["user_id"], exp)
         )
     e = discord.Embed(
         title="⏳ Đơn chờ (" + str(len(pending)) + ")",
@@ -1231,34 +1329,50 @@ async def info(ctx: commands.Context):
         + "🔌 Port: `" + str(WEBHOOK_PORT) + "`\n"
         + "🔑 SePay: `" + sepay_ok + "`\n"
         + "⏳ Đơn chờ: `" + str(pending) + "` / Tổng: `" + str(len(orders)) + "`\n"
-        + "🎯 Legit: `" + API_LEGIT_BASE + "`\n"
-        + "🔫 Aimbot: `" + API_AIMBOT_BASE + "`",
+        + "📦 Kho key: `" + str(count_keys_total()) + "` (thu muc `keys/`)\n"
+        + stock_summary_text()[:1800],
         delete_after=30,
     )
+
+@bot.command(name="keystock")
+@commands.has_permissions(administrator=True)
+async def keystock(ctx: commands.Context):
+    e = discord.Embed(
+        title="📦 Tồn kho key",
+        description=stock_summary_text(),
+        color=C_NEXUS,
+    )
+    e.set_footer(text="Them key: keys/<ma_goi>.txt — moi dong 1 key")
+    await ctx.send(embed=e)
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def testkey(ctx: commands.Context, pkg_id: str = "ah_1d"):
-    await ctx.send("⏳ Đang tạo key `" + pkg_id + "`...", delete_after=5)
-    key = await fetch_key(pkg_id)
+    """Lay 1 key that (xoa khoi file) — chi de test."""
+    if pkg_id not in PKG:
+        return await ctx.send("❌ Ma goi khong hop le. VD: `ld_1d`, `ah_3h`", delete_after=10)
+    await ctx.send("⏳ Dang lay key `" + pkg_id + "` tu kho...", delete_after=5)
+    key = await take_key(pkg_id)
     if key:
-        await ctx.send("✅ Key: `" + key + "`", delete_after=30)
+        await ctx.send(
+            "✅ Key (da xoa khoi file):\n`" + key + "`\nCon: **" + str(count_keys(pkg_id)) + "**",
+            delete_after=60,
+        )
     else:
-        await ctx.send("❌ Tạo key thất bại — xem log", delete_after=15)
+        await ctx.send("❌ Het key trong `keys/" + pkg_id + ".txt`", delete_after=15)
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def sepaycheck(ctx: commands.Context):
     if not SEPAY_TOKEN:
         return await ctx.send("❌ SEPAY_TOKEN chua cau hinh!", delete_after=10)
-    status, txn_data = await _sepay_get({"limit": 10})
+    status, txns = await _fetch_sepay_transactions(10)
     if status == 401:
         return await ctx.send(
             "❌ **SePay 401** — Token sai hoặc hết hạn.\n"
-            "Vào [my.sepay.vn](https://my.sepay.vn) → API → tạo token mới → dán vào Render Environment `SEPAY_TOKEN` → Deploy lại.",
+            "Vào [my.sepay.vn](https://my.sepay.vn) → API → tạo token mới → dán vào Render Environment `SEPAY_TOKEN` → Deploy lại → `!sepayreset`.",
             delete_after=30,
         )
-    txns  = txn_data.get("transactions", [])
     lines = ["**📥 " + str(len(txns)) + " giao dich gan nhat:**"]
     if txns:
         for txn in txns[:5]:
@@ -1272,10 +1386,22 @@ async def sepaycheck(ctx: commands.Context):
     pending = [(oid, o) for oid, o in orders.items() if not o.get("paid")]
     lines.append("\n**Don cho: " + str(len(pending)) + "**")
     for oid, o in pending[:5]:
-        lines.append("  `" + oid + "` — " + "{:,}".format(o["amount"]) + "d")
+        lines.append(
+            "  `" + oid + "` CK `{:,}` +`{:,}` — <@{}>".format(
+                _order_transfer_amount(o), _order_credit_amount(o), o["user_id"]
+            )
+        )
 
     e = discord.Embed(title="SePay Status", description="\n".join(lines), color=0x00BFFF)
     await ctx.send(embed=e)
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def sepayreset(ctx: commands.Context):
+    """Reset cờ 401 SePay sau khi đổi token."""
+    global _sepay_auth_failed
+    _sepay_auth_failed = False
+    await ctx.send("✅ Đã reset trạng thái SePay. Thử `!sepaycheck`.")
 
 @bot.command()
 @commands.has_permissions(administrator=True)
@@ -1327,6 +1453,11 @@ async def on_ready():
 
     if not poll_sepay.is_running():
         poll_sepay.start()
+        log.info("poll_sepay da bat (moi %ds)", poll_sepay.seconds)
+
+    pending_n = len([o for o in orders.values() if not o.get("paid") and not _order_expired(o)])
+    if pending_n:
+        log.info("Con %d don nap cho xu ly", pending_n)
 
     if not SEPAY_TOKEN:
         log.warning("SEPAY_TOKEN chua cau hinh!")
@@ -1334,9 +1465,10 @@ async def on_ready():
         log.warning("SEPAY_TOKEN bi 401 — can cap nhat tren Render")
     else:
         log.info("SEPAY_TOKEN OK (do dai %d)", len(SEPAY_TOKEN))
-    if not API_ADMIN_USER or not API_ADMIN_PASS:
-        log.warning("API_ADMIN_USER/PASS chua cau hinh — khong tao duoc key!")
-    else:
-        log.info("API Legit: %s | Aimbot: %s", API_LEGIT_BASE, API_AIMBOT_BASE)
+    log.info("Kho key: %d tong | %s", count_keys_total(), KEYS_DIR)
+    for pid in PKG:
+        c = count_keys(pid)
+        if c:
+            log.info("  %s: %d key", pid, c)
 
 bot.run(TOKEN)
