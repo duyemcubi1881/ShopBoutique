@@ -1,6 +1,6 @@
 """
 DUCDUY BOUTIQUE — Discord Shop Bot
-Nap tien tu dong (SePay) + mua key tu kho file keys/
+Nap tien tu dong (SePay) + tao key qua API backend + gui DM
 """
 
 from __future__ import annotations
@@ -62,10 +62,15 @@ SHOP_THUMBNAIL = _clean_env(os.getenv("SHOP_THUMBNAIL", ""))
 SUPPORT_TEXT = _clean_env(os.getenv("SUPPORT_TEXT", "Ticket server · DM admin"))
 DEPOSIT_MSG_TTL = int(os.getenv("DEPOSIT_MSG_TTL", "120"))
 MIN_DEPOSIT = int(os.getenv("MIN_DEPOSIT", "1000"))
-# Moi don +1..999d so tien CK (tranh khop GD cu cung so tien)
 USE_UNIQUE_AMOUNT = os.getenv("DEPOSIT_UNIQUE_SUFFIX", "1").lower() not in ("0", "false", "no")
 
+API_AIMBOT_BASE = _clean_env(os.getenv("API_AIMBOT_BASE", "https://aovduy.onrender.com")).rstrip("/")
+API_LEGIT_BASE = _clean_env(os.getenv("API_LEGIT_BASE", "https://api2-inoj.onrender.com")).rstrip("/")
+API_ADMIN_USER = _clean_env(os.getenv("API_ADMIN_USER"))
+API_ADMIN_PASS = _clean_env(os.getenv("API_ADMIN_PASS"))
+
 C_NEXUS = 0xF5C451
+C_PANEL = 0x12151C
 C_LEGIT = 0x3DFFA8
 C_AIMBOT = 0xFF4FD8
 
@@ -73,27 +78,29 @@ PRODUCTS = {
     "legit_drag": {
         "label": "Legit Drag",
         "emoji": "🎯",
-        "tagline": "Ghim Ngực - Kéo Tâm Dễ Dàng",
+        "tagline": "Ghim Ngực · Kéo Tâm Dễ · Chơi Chay",
+        "server": "INOJ Cloud",
         "accent": C_LEGIT,
         "packages": [
-            {"id": "ld_3h", "name": "Legit Drag 3 Giờ", "price": 3_000, "duration": "3 giờ"},
-            {"id": "ld_1d", "name": "Legit Drag 1 Ngày", "price": 10_000, "duration": "1 ngày"},
-            {"id": "ld_7d", "name": "Legit Drag 7 Ngày", "price": 50_000, "duration": "7 ngày"},
-            {"id": "ld_1m", "name": "Legit Drag 1 Tháng", "price": 120_000, "duration": "1 tháng"},
-            {"id": "ld_1ob", "name": "Legit Drag 1 OB", "price": 240_000, "duration": "1 OB"},
+            {"id": "ld_3h", "name": "Legit Drag 3 Giờ", "price": 3_000, "duration": "3 giờ", "hours": 3},
+            {"id": "ld_1d", "name": "Legit Drag 1 Ngày", "price": 10_000, "duration": "1 ngày", "days": 1},
+            {"id": "ld_7d", "name": "Legit Drag 7 Ngày", "price": 50_000, "duration": "7 ngày", "days": 7},
+            {"id": "ld_1m", "name": "Legit Drag 1 Tháng", "price": 120_000, "duration": "1 tháng", "days": 30},
+            {"id": "ld_1ob", "name": "Legit Drag 1 OB", "price": 240_000, "duration": "1 OB", "days": 90},
         ],
     },
     "aimbot_head": {
         "label": "Aimbot Head",
         "emoji": "🔫",
-        "tagline": "Ghim Đầu Chặt - Dễ Sử Dụng",
+        "tagline": "Ghim Đầu Chặt · Không Lỗi Dame",
+        "server": "AOV Duy Node",
         "accent": C_AIMBOT,
         "packages": [
-            {"id": "ah_3h", "name": "Aimbot Head 3 Giờ", "price": 5_000, "duration": "3 giờ"},
-            {"id": "ah_1d", "name": "Aimbot Head 1 Ngày", "price": 15_000, "duration": "1 ngày"},
-            {"id": "ah_7d", "name": "Aimbot Head 7 Ngày", "price": 60_000, "duration": "7 ngày"},
-            {"id": "ah_1m", "name": "Aimbot Head 1 Tháng", "price": 240_000, "duration": "1 tháng"},
-            {"id": "ah_1ob", "name": "Aimbot Head 1 OB", "price": 450_000, "duration": "1 OB"},
+            {"id": "ah_3h", "name": "Aimbot Head 3 Giờ", "price": 5_000, "duration": "3 giờ", "hours": 3},
+            {"id": "ah_1d", "name": "Aimbot Head 1 Ngày", "price": 15_000, "duration": "1 ngày", "days": 1},
+            {"id": "ah_7d", "name": "Aimbot Head 7 Ngày", "price": 60_000, "duration": "7 ngày", "days": 7},
+            {"id": "ah_1m", "name": "Aimbot Head 1 Tháng", "price": 240_000, "duration": "1 tháng", "days": 30},
+            {"id": "ah_1ob", "name": "Aimbot Head 1 OB", "price": 450_000, "duration": "1 OB", "days": 90},
         ],
     },
 }
@@ -121,8 +128,8 @@ log = logging.getLogger("shop")
 # ─────────────────────────────────────────────────────────────
 
 DATA_FILE = _ROOT / "data.json"
-KEYS_DIR = _ROOT / "keys"
-_key_lock = asyncio.Lock()
+API_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=20)
+_api_lock = asyncio.Lock()
 
 balances: dict[int, int] = {}
 orders: dict[str, dict] = {}
@@ -193,60 +200,89 @@ def deduct_balance(uid: int, amount: int) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────
-# KEYS (file)
+# API KEY (login + createkey)
 # ─────────────────────────────────────────────────────────────
 
 
-def _init_keys() -> None:
-    KEYS_DIR.mkdir(parents=True, exist_ok=True)
-    for pid in PKG:
-        p = KEYS_DIR / f"{pid}.txt"
-        if not p.exists():
-            p.write_text(f"# Key goi {pid} — moi dong 1 key\n", encoding="utf-8")
+def _api_base(product_key: str) -> str:
+    return API_LEGIT_BASE if product_key == "legit_drag" else API_AIMBOT_BASE
 
 
-def _read_keys(path: Path) -> list[str]:
-    if not path.exists():
-        return []
-    return [
-        ln.strip()
-        for ln in path.read_text(encoding="utf-8").splitlines()
-        if ln.strip() and not ln.strip().startswith("#")
-    ]
+def _duration_payload(pkg: dict) -> dict:
+    if pkg.get("hours"):
+        return {"duration_hours": int(pkg["hours"])}
+    return {"days": int(pkg.get("days") or 1)}
 
 
-def count_keys(pkg_id: str) -> int:
-    return len(_read_keys(KEYS_DIR / f"{pkg_id}.txt"))
-
-
-def count_keys_product(pk: str) -> int:
-    return sum(count_keys(p["id"]) for p in PRODUCTS[pk]["packages"])
-
-
-def _pop_key_sync(pkg_id: str) -> str | None:
-    path = KEYS_DIR / f"{pkg_id}.txt"
-    keys = _read_keys(path)
-    if not keys:
+def _extract_key(data: dict) -> str | None:
+    if not isinstance(data, dict):
         return None
-    key, rest = keys[0], keys[1:]
-    path.write_text(("\n".join(rest) + "\n") if rest else "# Het key\n", encoding="utf-8")
-    return key
+    k = data.get("key") or data.get("key_string") or data.get("license")
+    if isinstance(k, dict):
+        k = k.get("key")
+    return str(k).strip() if k else None
 
 
-async def take_key(pkg_id: str) -> str | None:
-    async with _key_lock:
-        return await asyncio.to_thread(_pop_key_sync, pkg_id)
+async def api_create_key(product_key: str, pkg: dict, buyer_id: int) -> str | None:
+    """Dang nhap admin + POST /api/createkey — tra ve key string."""
+    if not API_ADMIN_USER or not API_ADMIN_PASS:
+        log.error("Thieu API_ADMIN_USER / API_ADMIN_PASS tren Render")
+        return None
+
+    base = _api_base(product_key)
+    note = f"discord-{pkg['id']}-u{buyer_id}"
+    body = {
+        **_duration_payload(pkg),
+        "key_type": "single_device",
+        "created_by": "DucDuyBoutique",
+        "note": note,
+    }
+
+    async with _api_lock:
+        try:
+            async with aiohttp.ClientSession(
+                timeout=API_TIMEOUT,
+                headers={"User-Agent": "DucDuyBoutique/3.0", "Accept": "application/json"},
+            ) as session:
+                login = await session.post(
+                    f"{base}/api/login",
+                    json={"username": API_ADMIN_USER, "password": API_ADMIN_PASS},
+                )
+                if login.status != 200:
+                    txt = await login.text()
+                    log.error("API login %s fail %s: %s", product_key, login.status, txt[:200])
+                    return None
+
+                log.info("API login OK @ %s", base)
+                resp = await session.post(f"{base}/api/createkey", json=body)
+                raw = await resp.text()
+                try:
+                    data = json.loads(raw) if raw.strip().startswith("{") else {}
+                except json.JSONDecodeError:
+                    data = {}
+
+                if resp.status not in (200, 201):
+                    log.error("API createkey %s %s: %s", product_key, resp.status, raw[:250])
+                    return None
+
+                key = _extract_key(data)
+                if key:
+                    log.info("API key OK [%s] %s…", pkg["id"], key[:12])
+                return key
+        except asyncio.TimeoutError:
+            log.error("API timeout %s — server co the dang ngu (Render free)", base)
+            return None
+        except Exception as e:
+            log.error("API loi %s: %s", product_key, e)
+            return None
 
 
-def stock_text() -> str:
+def api_nodes_text() -> str:
     lines = []
     for pk, pv in PRODUCTS.items():
-        parts = [f"`{p['duration']}`: **{count_keys(p['id'])}**" for p in pv["packages"]]
-        lines.append(f"{pv['emoji']} **{pv['label']}** ({count_keys_product(pk)})\n" + " · ".join(parts))
+        ok = "🟢" if API_ADMIN_USER and API_ADMIN_PASS else "🔴"
+        lines.append(f"{ok} {pv['emoji']} **{pv['label']}** · `{_api_base(pk)}`")
     return "\n".join(lines)
-
-
-_init_keys()
 
 # ─────────────────────────────────────────────────────────────
 # DON NAP + QR
@@ -698,31 +734,99 @@ def hub_embed() -> discord.Embed:
     e = discord.Embed(
         title="✦ DUCDUY BOUTIQUE",
         description=(
-            "╭・⚡ Giao key tự động\n"
-            "├・💳 Nạp tiền tự động (SePay)\n"
-            "╰・🔐 Key gửi qua DM\n\n"
-            f"## {ld['emoji']} {ld['label']}\n> Từ **{_fmt(min(p['price'] for p in ld['packages']))}**\n\n"
-            f"## {ah['emoji']} {ah['label']}\n> Từ **{_fmt(min(p['price'] for p in ah['packages']))}**"
+            "```ansi\n\u001b[1;35m◆ SHOP LICENSE AUTO · BOUTIQUE ◆\u001b[0m\n```\n"
+            "╭・⚡ **Giao key tự động** (API Cloud)\n"
+            "├・💳 **Nạp ví** VietQR + SePay\n"
+            "├・🔐 **Key riêng** gửi qua DM\n"
+            "╰・🛰️ **24/7** không cần admin\n\n"
+            f"## {ld['emoji']} {ld['label']}\n"
+            f"> {ld['tagline']}\n"
+            f"> 🛰️ `{ld['server']}` · từ **{_fmt(min(p['price'] for p in ld['packages']))}**\n\n"
+            f"## {ah['emoji']} {ah['label']}\n"
+            f"> {ah['tagline']}\n"
+            f"> 🛰️ `{ah['server']}` · từ **{_fmt(min(p['price'] for p in ah['packages']))}**"
         ),
         color=C_NEXUS,
     )
-    e.add_field(name="📦 Tồn kho", value=stock_text()[:1020] or "Chưa có key", inline=False)
-    e.add_field(name="📡 Hỗ trợ", value=f"```{SUPPORT_TEXT}```", inline=True)
+    e.add_field(
+        name="🛒 Quy trình",
+        value=(
+            "```yaml\n"
+            "1. Nạp tiền vào ví\n"
+            "2. Chọn lane sản phẩm\n"
+            "3. Chọn gói + mua\n"
+            "4. Nhận key qua DM\n"
+            "```"
+        ),
+        inline=True,
+    )
+    e.add_field(name="📡 Hỗ trợ", value=f"```fix\n{SUPPORT_TEXT}\n```", inline=True)
+    e.add_field(name="🌐 Node API", value=api_nodes_text(), inline=False)
     if SHOP_THUMBNAIL:
         e.set_image(url=SHOP_THUMBNAIL)
     if bot.user:
         e.set_author(name="DUCDUY BOUTIQUE", icon_url=bot.user.display_avatar.url)
+        e.set_footer(text="DUCDUY BOUTIQUE · LICENSE SYSTEM", icon_url=bot.user.display_avatar.url)
+    return e
+
+
+def guide_embed() -> discord.Embed:
+    e = discord.Embed(
+        title="📡 HƯỚNG DẪN",
+        description=(
+            "```yaml\n"
+            "1. Bấm Nạp ví → nhập số tiền\n"
+            "2. Quét QR / chuyển đúng số CK\n"
+            "3. Đợi bot cộng tiền (~1-2 phút)\n"
+            "4. Chọn LEGIT / AIMBOT → gói\n"
+            "5. Mua → nhận key trong DM\n"
+            "```\n"
+            "⚠️ **Lưu ý nạp tiền**\n"
+            "> Chuyển **sau** khi tạo đơn\n"
+            "> Đúng **số CK** trên embed (vd. 50.001₫)\n"
+            "> Ghi nội dung `NAP...` nếu có thể"
+        ),
+        color=C_NEXUS,
+    )
     return e
 
 
 def vault_embed(pk: str) -> discord.Embed:
     pv = PRODUCTS[pk]
-    lines = "\n".join(f"⏳ **{p['duration']}** — `{_fmt(p['price'])}` ({count_keys(p['id'])} key)" for p in pv["packages"])
+    rows = []
+    for p in pv["packages"]:
+        rows.append(f"╭・⏳ **{p['duration']}**\n╰・💸 `{_fmt(p['price'])}`")
     e = discord.Embed(
-        title=f"{pv['emoji']} {pv['label'].upper()}",
-        description=f"{pv['tagline']}\n\n{lines}\n\nChọn gói bên dưới.",
+        title=f"{pv['emoji']} KHO · {pv['label'].upper()}",
+        description=(
+            f"```ansi\n\u001b[1;36m{pv['tagline']}\u001b[0m\n```\n"
+            f"🛰️ **Node:** `{pv['server']}`\n"
+            f"🔗 `{_api_base(pk)}`\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            + "\n".join(rows)
+            + "\n━━━━━━━━━━━━━━━━━━\n\n⚡ Chọn gói bên dưới để mua."
+        ),
         color=pv["accent"],
     )
+    e.set_footer(text=f"DUCDUY BOUTIQUE · {pk.upper()}")
+    return e
+
+
+def license_dm_embed(pv: dict, pkg: dict, keys: list[str]) -> discord.Embed:
+    block = "\n".join(f"▸ `{k}`" for k in keys)
+    e = discord.Embed(title=f"◈ LICENSE · {pv['label'].upper()}", color=pv["accent"])
+    e.description = (
+        "```fix\n"
+        "┏━━━━━━━━ LICENSE UNLOCKED ━━━━━━━━┓\n"
+        f"┃  {pv['emoji']}  {pkg['name']}\n"
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
+        "```\n"
+        f"{block}\n\n"
+        f"⏱️ **Hạn:** {pkg['duration']}\n"
+        f"🛰️ **Node:** {pv['server']}\n\n"
+        "⚠️ Không chia sẻ key · một thiết bị"
+    )
+    e.set_footer(text="ducduy boutique · auto api")
     return e
 
 
@@ -751,9 +855,13 @@ class VaultView(discord.ui.View):
         super().__init__(timeout=180)
         self.add_item(PackageSelect(pk))
 
-    @discord.ui.button(label="Đóng", emoji="✖", style=discord.ButtonStyle.secondary, row=1)
-    async def close(self, interaction: discord.Interaction, _):
-        await interaction.response.edit_message(content="Đã đóng.", embed=None, view=None)
+    @discord.ui.button(label="Quay lại", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, _):
+        await interaction.response.edit_message(
+            content="```ansi\n\u001b[1;31mĐã đóng kho license\u001b[0m\n```",
+            embed=None,
+            view=None,
+        )
 
 
 class NexusHubView(discord.ui.View):
@@ -775,8 +883,16 @@ class NexusHubView(discord.ui.View):
     @discord.ui.button(label="Số dư", emoji="💰", style=discord.ButtonStyle.secondary, custom_id="hub_bal", row=1)
     async def balance(self, interaction: discord.Interaction, _):
         bal = get_balance(interaction.user.id)
-        em = discord.Embed(title="💰 Ví của bạn", description=f"**`{bal:,}` VNĐ**", color=C_NEXUS)
+        em = discord.Embed(
+            title="✨ VÍ CỦA BẠN",
+            description=f"```ansi\n\u001b[1;32m{bal:,} VNĐ\u001b[0m\n```",
+            color=C_NEXUS,
+        )
         await interaction.response.send_message(embed=em, ephemeral=True)
+
+    @discord.ui.button(label="Hướng dẫn", emoji="📡", style=discord.ButtonStyle.secondary, custom_id="hub_guide", row=1)
+    async def guide_btn(self, interaction: discord.Interaction, _):
+        await interaction.response.send_message(embed=guide_embed(), ephemeral=True)
 
 
 class DepositModal(discord.ui.Modal, title="💳 Nạp tiền"):
@@ -833,38 +949,60 @@ class BuyModal(discord.ui.Modal):
                 f"❌ Không đủ tiền.\nSố dư: **{bal:,}** · Cần: **{total:,}** · Thiếu: **{total - bal:,}** VNĐ",
                 ephemeral=True,
             )
-        if count_keys(self.pkg_id) < q:
+        if not API_ADMIN_USER or not API_ADMIN_PASS:
             return await interaction.response.send_message(
-                f"❌ Hết key gói `{p['duration']}` (còn {count_keys(self.pkg_id)}).", ephemeral=True
+                "❌ Bot chưa cấu hình API admin trên server.", ephemeral=True
             )
 
+        pv = PRODUCTS[p["product_key"]]
         await interaction.response.defer(ephemeral=True)
+        await interaction.edit_original_response(
+            embed=discord.Embed(
+                title="⏳ Đang tạo license...",
+                description=(
+                    f"**{pv['label']}** → `{_api_base(p['product_key'])}`\n"
+                    f"Gói **{p['duration']}** × `{q}`\nVui lòng đợi 10–30 giây."
+                ),
+                color=pv["accent"],
+            )
+        )
+
         deduct_balance(uid, total)
         keys: list[str] = []
-        for _ in range(q):
-            k = await take_key(self.pkg_id)
+        for i in range(q):
+            k = await api_create_key(p["product_key"], p, uid)
             if k:
                 keys.append(k)
             else:
-                add_balance(uid, p["price"])
+                add_balance(uid, p["price"] * (q - len(keys)))
                 break
 
         new_bal = get_balance(uid)
-        pv = PRODUCTS[p["product_key"]]
-        em = discord.Embed(
-            title="✅ Mua thành công",
-            description=f"**{p['name']}** x{len(keys)}\n−{_fmt(p['price'] * len(keys))} · Ví {_fmt(new_bal)}",
-            color=pv["accent"],
-        )
+        paid = p["price"] * len(keys)
+        if keys:
+            em = discord.Embed(
+                title="◈ GIAO DỊCH HOÀN TẤT",
+                description=(
+                    f"**{p['name']}**\n━━━━━━━━━━━━━━━━━━━━\n"
+                    f"⏱️ `{p['duration']}` · 🔢 `{len(keys)}` key\n"
+                    f"💸 −`{_fmt(paid)}` · 💰 ví `{_fmt(new_bal)}`"
+                ),
+                color=pv["accent"],
+            )
+        else:
+            em = discord.Embed(
+                title="❌ Không tạo được key",
+                description=(
+                    "API server có thể đang ngủ hoặc lỗi.\n"
+                    "Đã hoàn tiền vào ví. Thử lại sau 1 phút."
+                ),
+                color=0xE74C3C,
+            )
         await interaction.edit_original_response(embed=em)
 
         if keys:
             try:
-                user = interaction.user
-                dm = discord.Embed(title=f"🔑 {pv['label']}", color=pv["accent"])
-                dm.description = "\n".join(f"`{k}`" for k in keys)
-                dm.set_footer(text="Không chia sẻ key")
-                await user.send(embed=dm)
+                await interaction.user.send(embed=license_dm_embed(pv, p, keys))
             except discord.Forbidden:
                 await interaction.followup.send("⚠️ Bật DM để nhận key.", ephemeral=True)
 
@@ -932,7 +1070,8 @@ async def info(ctx: commands.Context):
         f"**SePay:** `{sepay}`\n"
         f"**Đơn chờ:** {pending}\n"
         f"**Giờ VN:** {_vn_now_str()}\n"
-        f"**Kho:**\n{stock_text()[:1500]}"
+        f"**API:**\n{api_nodes_text()}\n"
+        f"**Legit:** `{API_LEGIT_BASE}`\n**Aimbot:** `{API_AIMBOT_BASE}`"
     )
 
 
@@ -960,10 +1099,17 @@ async def sepayreset(ctx: commands.Context):
     await ctx.send("✅ Đã reset SePay. Thử `!sepaycheck`.")
 
 
-@bot.command(name="keystock")
+@bot.command()
 @commands.has_permissions(administrator=True)
-async def cmd_keystock(ctx: commands.Context):
-    await ctx.send(embed=discord.Embed(title="📦 Kho key", description=stock_text(), color=C_NEXUS))
+async def testkey(ctx: commands.Context, pkg_id: str = "ld_1d"):
+    if pkg_id not in PKG:
+        return await ctx.send(f"❌ Gói không tồn tại. VD: `ld_1d`, `ah_3h`")
+    await ctx.send(f"⏳ Đang tạo key `{pkg_id}`...", delete_after=5)
+    k = await api_create_key(PKG[pkg_id]["product_key"], PKG[pkg_id], ctx.author.id)
+    if k:
+        await ctx.send(f"✅ Key: `{k}`", delete_after=30)
+    else:
+        await ctx.send("❌ Lỗi API — xem log Render", delete_after=15)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -987,6 +1133,10 @@ async def on_ready():
         await lock_old_txns()
     if not SEPAY_TOKEN:
         log.warning("Thieu SEPAY_TOKEN — khong tu cong tien")
+    if not API_ADMIN_USER or not API_ADMIN_PASS:
+        log.warning("Thieu API_ADMIN_USER/PASS — khong tao duoc key!")
+    else:
+        log.info("API Legit: %s | Aimbot: %s", API_LEGIT_BASE, API_AIMBOT_BASE)
 
 
 if not TOKEN:
