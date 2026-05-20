@@ -499,6 +499,7 @@ def _find_order(txn: dict) -> tuple[str | None, str | None]:
 
 
 async def sepay_fetch(limit: int = 50) -> tuple[int, list[dict]]:
+    global _sepay_auth_failed
     if not SEPAY_TOKEN or _sepay_auth_failed:
         return (401 if _sepay_auth_failed else 0), []
     headers = {"Authorization": f"Bearer {SEPAY_TOKEN}", "Accept": "application/json"}
@@ -507,7 +508,6 @@ async def sepay_fetch(limit: int = 50) -> tuple[int, list[dict]]:
             async with s.get(SEPAY_URL, headers=headers, params={"limit": limit}, timeout=HTTP_TIMEOUT) as r:
                 body = await r.text()
                 if r.status == 401:
-                    global _sepay_auth_failed
                     _sepay_auth_failed = True
                     log.error("SePay 401 — cap nhat SEPAY_TOKEN tren Render")
                     return 401, []
