@@ -42,10 +42,6 @@ ACCOUNT_NAME   = _clean_env(os.getenv("ACCOUNT_NAME", "DUCDUY BOUTIQUE"))
 BANK_DISPLAY   = _clean_env(os.getenv("BANK_DISPLAY", "MSB Bank"))
 SEPAY_TOKEN    = _clean_env(os.getenv("SEPAY_TOKEN") or os.getenv("SEPAY_API_KEY"))
 ORDER_EXPIRE   = int(os.getenv("ORDER_EXPIRE_MINUTES", "15")) * 60
-API_AIMBOT_BASE = _clean_env(os.getenv("API_AIMBOT_BASE", "https://aovduy.onrender.com")).rstrip("/")
-API_LEGIT_BASE  = _clean_env(os.getenv("API_LEGIT_BASE", "https://api2-inoj.onrender.com")).rstrip("/")
-API_ADMIN_USER  = _clean_env(os.getenv("API_ADMIN_USER"))
-API_ADMIN_PASS  = _clean_env(os.getenv("API_ADMIN_PASS"))
 PUBLIC_URL     = _clean_env(
     os.getenv("PUBLIC_URL")
     or os.getenv("RENDER_EXTERNAL_URL")
@@ -130,7 +126,6 @@ PRODUCTS = {
         "label": "Legit Drag",
         "emoji": "🎯",
         "tagline": "Ghim Ngực - Kéo Tâm Dễ Dàng - Phù Hợp Chơi Chay",
-        "server": "INOJ Cloud",
         "accent": C_LEGIT,
         "packages": [
             {"id": "ld_3h",  "name": "Legit Drag 3 Gio",   "price":   3_000, "duration": "3 gio",   "days": 1},
@@ -144,7 +139,6 @@ PRODUCTS = {
         "label": "Aimbot Head",
         "emoji": "🔫",
         "tagline": "Ghim Đầu Chặt - Không Lỗi Dame - Dễ Sử Dụng",
-        "server": "AOV Duy Node",
         "accent": C_AIMBOT,
         "packages": [
             {"id": "ah_3h",  "name": "Aimbot Head 3 Gio",   "price":   5_000, "duration": "3 gio",   "days": 1},
@@ -164,8 +158,86 @@ for _pk, _pv in PRODUCTS.items():
 def _min_price(product_key: str) -> int:
     return min(p["price"] for p in PRODUCTS[product_key]["packages"])
 
-def _api_base(product_key: str) -> str:
-    return API_LEGIT_BASE if product_key == "legit_drag" else API_AIMBOT_BASE
+# ══════════════════════════════════════════
+# KHO KEY (FILE) — keys/<ma_goi>.txt, moi dong 1 key
+# ══════════════════════════════════════════
+
+KEYS_DIR = Path(__file__).resolve().parent / "keys"
+_key_file_lock = asyncio.Lock()
+
+def _init_keys_dir():
+    KEYS_DIR.mkdir(parents=True, exist_ok=True)
+    for pkg_id in PKG:
+        p = KEYS_DIR / (pkg_id + ".txt")
+        if not p.exists():
+            p.write_text(
+                "# File key cho goi: " + pkg_id + "\n"
+                "# Moi dong 1 key. Dong # la ghi chu.\n",
+                encoding="utf-8",
+            )
+
+def _key_file_path(pkg_id: str) -> Path:
+    return KEYS_DIR / (pkg_id + ".txt")
+
+def _read_key_lines(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return [ln.strip() for ln in lines if ln.strip() and not ln.strip().startswith("#")]
+
+def count_keys(pkg_id: str) -> int:
+    return len(_read_key_lines(_key_file_path(pkg_id)))
+
+def count_keys_product(product_key: str) -> int:
+    return sum(count_keys(p["id"]) for p in PRODUCTS[product_key]["packages"])
+
+def count_keys_total() -> int:
+    return sum(count_keys(pid) for pid in PKG)
+
+def _pop_key_sync(pkg_id: str) -> str | None:
+    path = _key_file_path(pkg_id)
+    keys = _read_key_lines(path)
+    if not keys:
+        return None
+    key = keys[0]
+    rest = keys[1:]
+    path.write_text(
+        ("\n".join(rest) + "\n") if rest else "# Het key — them key moi vao file nay\n",
+        encoding="utf-8",
+    )
+    log.info("Lay key %s | con lai %d", pkg_id, len(rest))
+    return key
+
+async def take_key(pkg_id: str) -> str | None:
+    async with _key_file_lock:
+        return await asyncio.to_thread(_pop_key_sync, pkg_id)
+
+def _restore_keys_sync(pkg_id: str, keys: list[str]) -> None:
+    if not keys:
+        return
+    path = _key_file_path(pkg_id)
+    existing = _read_key_lines(path)
+    path.write_text("\n".join(keys + existing) + "\n", encoding="utf-8")
+    log.info("Hoan %d key vao %s", len(keys), pkg_id)
+
+async def restore_keys(pkg_id: str, keys: list[str]) -> None:
+    async with _key_file_lock:
+        await asyncio.to_thread(_restore_keys_sync, pkg_id, keys)
+
+def stock_summary_text() -> str:
+    lines = []
+    for pk, pv in PRODUCTS.items():
+        parts = []
+        for p in pv["packages"]:
+            c = count_keys(p["id"])
+            icon = "🟢" if c > 5 else ("🟡" if c else "🔴")
+            parts.append(icon + " `" + p["duration"] + "`: **" + str(c) + "**")
+        total = count_keys_product(pk)
+        lines.append(pv["emoji"] + " **" + pv["label"] + "** — `" + str(total) + "` key\n" + " · ".join(parts))
+    lines.append("\n**Tổng kho:** `" + str(count_keys_total()) + "` key")
+    return "\n".join(lines)
+
+_init_keys_dir()
 
 def _fmt_vnd(n: int) -> str:
     return "{:,}".format(n) + "₫"
@@ -510,75 +582,6 @@ async def _sepay_get(params: dict | None = None) -> tuple[int, dict]:
         log.error("SePay request loi: %s", e)
         return 0, {}
 
-async def fetch_key(package_id: str) -> str | None:
-    pkg = PKG.get(package_id)
-    if not pkg:
-        return None
-    if not API_ADMIN_USER or not API_ADMIN_PASS:
-        log.error("Chua cau hinh API_ADMIN_USER / API_ADMIN_PASS")
-        return None
-
-    pk = pkg["product_key"]
-    base = _api_base(pk)
-    days = pkg["days"]
-
-    login_url = base + "/api/login"
-    key_url = base + "/api/createkey"
-    payload = {
-        "days": days,
-        "key_type": "single_device",
-        "created_by": "BoutiqueNexus",
-        "note": "discord-" + package_id,
-    }
-
-    for attempt in range(2):
-        try:
-            async with aiohttp.ClientSession(headers=HTTP_HEADERS) as session:
-                login_resp = await session.post(
-                    login_url,
-                    json={"username": API_ADMIN_USER, "password": API_ADMIN_PASS},
-                    headers={"Content-Type": "application/json"},
-                    timeout=API_TIMEOUT,
-                )
-                login_body, _ = await _read_http(login_resp)
-                if login_resp.status != 200 or _is_cloudflare_html(login_body):
-                    _log_http_fail("[%s] login" % pk, login_url, login_resp.status, login_body)
-                    if attempt == 0 and login_resp.status in (502, 503, 520, 521, 522, 524):
-                        await asyncio.sleep(20)
-                        continue
-                    return None
-
-                log.info("[%s] login OK @ %s → createkey %sd", pk, base, days)
-                key_resp = await session.post(
-                    key_url,
-                    json=payload,
-                    headers={"Content-Type": "application/json"},
-                    timeout=API_TIMEOUT,
-                )
-                key_body, data = await _read_http(key_resp)
-                if key_resp.status in (200, 201) and not _is_cloudflare_html(key_body):
-                    key = data.get("key") or data.get("license") or data.get("data")
-                    if isinstance(key, dict):
-                        key = key.get("key")
-                    if key:
-                        log.info("[%s] key OK: %s", pk, str(key)[:12] + "...")
-                        return str(key)
-                _log_http_fail("[%s] createkey" % pk, key_url, key_resp.status, key_body or str(data))
-                if attempt == 0 and key_resp.status in (502, 503, 520, 521, 522, 524):
-                    await asyncio.sleep(20)
-                    continue
-                return None
-        except asyncio.TimeoutError:
-            log.error("[%s] API timeout %s (lan %d) — Render co the dang ngu", pk, base, attempt + 1)
-            if attempt == 0:
-                await asyncio.sleep(15)
-                continue
-            return None
-        except Exception as e:
-            log.error("fetch_key [%s] loi: %s", package_id, e)
-            return None
-    return None
-
 async def confirm_payment(order_id: str, txn_fp: str | None = None):
     order = orders.get(order_id)
     if not order or order.get("paid"):
@@ -873,31 +876,49 @@ class BuyModal(discord.ui.Modal):
                 ephemeral=True,
             )
 
+        stock = count_keys(self.pkg_id)
+        if stock < qty:
+            return await interaction.response.send_message(
+                "❌ **Hết key cho gói này!**\n"
+                + "📦 Còn lại: **" + str(stock) + "** key · Bạn cần: **" + str(qty) + "**\n"
+                + "Liên hệ admin để nạp thêm key vào kho.",
+                ephemeral=True,
+            )
+
         pv = PRODUCTS[pkg["product_key"]]
         await interaction.response.defer(ephemeral=True)
         await interaction.edit_original_response(
             embed=discord.Embed(
-                title="⏳  Đang kết nối máy chủ license...",
-                description=(
-                    "Lane **" + pv["label"] + "** → `" + _api_base(pkg["product_key"]) + "`\n"
-                    "Vui lòng đợi vài giây."
-                ),
+                title="⏳  Đang lấy key từ kho...",
+                description="Gói **" + pkg["name"] + "** · `" + str(qty) + "` key",
                 color=pv["accent"],
             )
         )
 
-        deduct_balance(uid, total)
         keys_ok: list[str] = []
-        keys_err = 0
         for _ in range(qty):
-            k = await fetch_key(self.pkg_id)
+            k = await take_key(self.pkg_id)
             if k:
                 keys_ok.append(k)
             else:
-                keys_err += 1
+                break
 
-        if keys_err:
-            add_balance(uid, pkg["price"] * keys_err)
+        if len(keys_ok) < qty:
+            if keys_ok:
+                await restore_keys(self.pkg_id, keys_ok)
+            return await interaction.edit_original_response(
+                embed=discord.Embed(
+                    title="❌  Kho key thay đổi",
+                    description=(
+                        "Chỉ lấy được **" + str(len(keys_ok)) + "/" + str(qty) + "** key.\n"
+                        "Không trừ tiền — thử lại sau khi admin nạp kho."
+                    ),
+                    color=0xE74C3C,
+                ),
+                view=None,
+            )
+
+        deduct_balance(uid, total)
 
         new_bal = get_balance(uid)
         accent = pv["accent"]
@@ -906,14 +927,9 @@ class BuyModal(discord.ui.Modal):
             "**" + pkg["name"] + "**\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             "⏱️ `" + pkg["duration"] + "`  ·  🔢 `" + str(len(keys_ok)) + "` key\n"
-            "💸 −`" + _fmt_vnd(pkg["price"] * len(keys_ok)) + "`  ·  💰 ví `" + _fmt_vnd(new_bal) + "`"
+            "💸 −`" + _fmt_vnd(pkg["price"] * len(keys_ok)) + "`  ·  💰 ví `" + _fmt_vnd(new_bal) + "`\n"
+            "📦 Còn trong kho: **" + str(count_keys(self.pkg_id)) + "** key"
         )
-        if keys_err:
-            receipt.add_field(
-                name="Hoàn tiền",
-                value="`" + str(keys_err) + "` key lỗi → +" + _fmt_vnd(pkg["price"] * keys_err),
-                inline=False,
-            )
         await interaction.edit_original_response(embed=receipt, view=None)
 
         if keys_ok:
@@ -931,8 +947,7 @@ class BuyModal(discord.ui.Modal):
                     "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
                     "```\n"
                     + keys_block + "\n\n"
-                    "⏱️ **Hạn:** " + pkg["duration"] + "\n"
-                    "🛰️ **Node:** " + pv["server"] + "\n\n"
+                    "⏱️ **Hạn:** " + pkg["duration"] + "\n\n"
                     "⚠️ Không chia sẻ key · một thiết bị"
                 )
                 dm.set_footer(text="ducduy boutique · nexus")
@@ -988,6 +1003,11 @@ def embed_nexus() -> discord.Embed:
         inline=True,
     )
     e.add_field(
+        name="📦 Tồn kho key",
+        value=stock_summary_text(),
+        inline=False,
+    )
+    e.add_field(
         name="✨ Ưu điểm",
         value=(
             "• Giao key ngay lập tức\n"
@@ -1009,8 +1029,10 @@ def embed_vault(product_key: str) -> discord.Embed:
     pv = PRODUCTS[product_key]
     package_lines = []
     for p in pv["packages"]:
+        c = count_keys(p["id"])
+        stock = "📦 `" + str(c) + "` key" if c else "🔴 **Hết hàng**"
         package_lines.append(
-            "╭・⏳ **" + p["duration"] + "**\n╰・💸 `" + _fmt_vnd(p["price"]) + "`"
+            "╭・⏳ **" + p["duration"] + "**\n├・💸 `" + _fmt_vnd(p["price"]) + "`\n╰・" + stock
         )
     e = discord.Embed(
         title=pv["emoji"] + " KHO LICENSE " + pv["label"].upper(),
@@ -1025,7 +1047,7 @@ def embed_vault(product_key: str) -> discord.Embed:
     )
     e.add_field(
         name="🔐 Hệ thống giao key",
-        value="Key gửi tự động qua DM · server `" + _api_base(product_key).replace("https://", "") + "`",
+        value="Key lấy từ kho file · gửi tự động qua DM · mỗi key chỉ dùng một lần",
         inline=False,
     )
     e.set_footer(text="DUCDUY BOUTIQUE • " + product_key.upper())
@@ -1039,7 +1061,7 @@ def embed_guide() -> discord.Embed:
             "1. Chọn sản phẩm cần mua\n"
             "2. Chọn gói license\n"
             "3. Nạp tiền vào ví\n"
-            "4. Hệ thống tự tạo key\n"
+            "4. Hệ thống gửi key từ kho\n"
             "5. Nhận key qua DM\n"
             "```\n"
             "⚠️ **LƯU Ý**\n"
@@ -1060,15 +1082,18 @@ def embed_guide() -> discord.Embed:
 class PackageSelect(discord.ui.Select):
     def __init__(self, product_key: str):
         pv = PRODUCTS[product_key]
-        opts = [
-            discord.SelectOption(
-                label=p["duration"] + " • " + _fmt_vnd(p["price"]),
-                value=p["id"],
-                description=p["name"][:95],
-                emoji="⚡",
+        opts = []
+        for p in pv["packages"]:
+            c = count_keys(p["id"])
+            desc = ("Con " + str(c) + " key") if c else "Het hang — lien he admin"
+            opts.append(
+                discord.SelectOption(
+                    label=p["duration"] + " • " + _fmt_vnd(p["price"]),
+                    value=p["id"],
+                    description=desc[:100],
+                    emoji="📦" if c else "🔴",
+                )
             )
-            for p in pv["packages"]
-        ]
         super().__init__(
             placeholder="⚡ Chọn gói license...",
             min_values=1,
@@ -1214,52 +1239,37 @@ async def info(ctx: commands.Context):
         + "🔌 Port: `" + str(WEBHOOK_PORT) + "`\n"
         + "🔑 SePay: `" + sepay_ok + "`\n"
         + "⏳ Đơn chờ: `" + str(pending) + "` / Tổng: `" + str(len(orders)) + "`\n"
-        + "🎯 Legit: `" + API_LEGIT_BASE + "`\n"
-        + "🔫 Aimbot: `" + API_AIMBOT_BASE + "`",
+        + "📦 Kho key: `" + str(count_keys_total()) + "` (thu muc `keys/`)\n"
+        + stock_summary_text()[:1800],
         delete_after=30,
     )
 
-@bot.command()
+@bot.command(name="keystock")
 @commands.has_permissions(administrator=True)
-async def apitest(ctx: commands.Context):
-    """Kiem tra 2 server key (phat hien Cloudflare / Render ngu)."""
-    await ctx.send("Dang goi API...", delete_after=5)
-    lines = []
-    for pk in ("legit_drag", "aimbot_head"):
-        base = _api_base(pk)
-        t0 = time.time()
-        try:
-            async with aiohttp.ClientSession(headers=HTTP_HEADERS) as s:
-                async with s.post(
-                    base + "/api/login",
-                    json={"username": API_ADMIN_USER, "password": API_ADMIN_PASS},
-                    headers={"Content-Type": "application/json"},
-                    timeout=API_TIMEOUT,
-                ) as r:
-                    body, _ = await _read_http(r)
-                    ms = int((time.time() - t0) * 1000)
-                    if _is_cloudflare_html(body):
-                        lines.append("**" + pk + "**: CLOUDFLARE " + str(r.status) + " (" + str(ms) + "ms)")
-                    elif r.status == 200:
-                        lines.append("**" + pk + "**: OK (" + str(ms) + "ms)")
-                    else:
-                        lines.append("**" + pk + "**: HTTP " + str(r.status) + " — " + _short_body(body, 80))
-        except asyncio.TimeoutError:
-            lines.append("**" + pk + "**: TIMEOUT (>60s) — mo " + base + " tren browser de danh thuc")
-        except Exception as ex:
-            lines.append("**" + pk + "**: " + str(ex)[:80])
-    e = discord.Embed(title="API Health", description="\n".join(lines), color=C_NEXUS)
+async def keystock(ctx: commands.Context):
+    e = discord.Embed(
+        title="📦 Tồn kho key",
+        description=stock_summary_text(),
+        color=C_NEXUS,
+    )
+    e.set_footer(text="Them key: keys/<ma_goi>.txt — moi dong 1 key")
     await ctx.send(embed=e)
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def testkey(ctx: commands.Context, pkg_id: str = "ah_1d"):
-    await ctx.send("⏳ Đang tạo key `" + pkg_id + "`...", delete_after=5)
-    key = await fetch_key(pkg_id)
+    """Lay 1 key that (xoa khoi file) — chi de test."""
+    if pkg_id not in PKG:
+        return await ctx.send("❌ Ma goi khong hop le. VD: `ld_1d`, `ah_3h`", delete_after=10)
+    await ctx.send("⏳ Dang lay key `" + pkg_id + "` tu kho...", delete_after=5)
+    key = await take_key(pkg_id)
     if key:
-        await ctx.send("✅ Key: `" + key + "`", delete_after=30)
+        await ctx.send(
+            "✅ Key (da xoa khoi file):\n`" + key + "`\nCon: **" + str(count_keys(pkg_id)) + "**",
+            delete_after=60,
+        )
     else:
-        await ctx.send("❌ Tạo key thất bại — xem log", delete_after=15)
+        await ctx.send("❌ Het key trong `keys/" + pkg_id + ".txt`", delete_after=15)
 
 @bot.command()
 @commands.has_permissions(administrator=True)
@@ -1361,9 +1371,10 @@ async def on_ready():
         log.warning("SEPAY_TOKEN bi 401 — can cap nhat tren Render")
     else:
         log.info("SEPAY_TOKEN OK (do dai %d)", len(SEPAY_TOKEN))
-    if not API_ADMIN_USER or not API_ADMIN_PASS:
-        log.warning("API_ADMIN_USER/PASS chua cau hinh — khong tao duoc key!")
-    else:
-        log.info("API Legit: %s | Aimbot: %s", API_LEGIT_BASE, API_AIMBOT_BASE)
+    log.info("Kho key: %d tong | %s", count_keys_total(), KEYS_DIR)
+    for pid in PKG:
+        c = count_keys(pid)
+        if c:
+            log.info("  %s: %d key", pid, c)
 
 bot.run(TOKEN)
