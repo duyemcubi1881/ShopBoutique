@@ -47,11 +47,13 @@ else:
 
 TOKEN = _clean_env(os.getenv("DISCORD_TOKEN"))
 BANK_NUMBER = _clean_env(os.getenv("BANK_NUMBER"))
-BANK_NAME = (_clean_env(os.getenv("BANK_NAME", "msb")) or "msb").lower()
-if BANK_NAME == "msbbank":
+BANK_NAME = (_clean_env(os.getenv("BANK_NAME", "tpbank")) or "tpbank").lower()
+if BANK_NAME in ("msbbank",):
     BANK_NAME = "msb"
-ACCOUNT_NAME = _clean_env(os.getenv("ACCOUNT_NAME", "DUCDUY BOUTIQUE"))
-BANK_DISPLAY = _clean_env(os.getenv("BANK_DISPLAY", "MSB Bank"))
+if BANK_NAME in ("tpbank", "tp bank"):
+    BANK_NAME = "tpbank"
+ACCOUNT_NAME = _clean_env(os.getenv("ACCOUNT_NAME", "NGO DUC DUY"))
+BANK_DISPLAY = _clean_env(os.getenv("BANK_DISPLAY", "TP BANK"))
 SEPAY_TOKEN = _clean_env(os.getenv("SEPAY_TOKEN") or os.getenv("SEPAY_API_KEY"))
 ORDER_EXPIRE_SEC = int(os.getenv("ORDER_EXPIRE_MINUTES", "15")) * 60
 PUBLIC_URL = _clean_env(
@@ -80,7 +82,7 @@ PRODUCTS = {
         "label": "Legit Drag",
         "emoji": "🎯",
         "tagline": "Ghim Ngực · Kéo Tâm Dễ · Chơi Chay",
-        "server": "INOJ Cloud",
+        "server": "Legit Drag",
         "accent": C_LEGIT,
         "packages": [
             {"id": "ld_3h", "name": "Legit Drag 3 Giờ", "price": 3_000, "duration": "3 giờ", "hours": 3},
@@ -94,7 +96,7 @@ PRODUCTS = {
         "label": "Aimbot Head",
         "emoji": "🔫",
         "tagline": "Ghim Đầu Chặt · Không Lỗi Dame",
-        "server": "AOV Duy Node",
+        "server": "Aimbot Head Exe",
         "accent": C_AIMBOT,
         "packages": [
             {"id": "ah_3h", "name": "Aimbot Head 3 Giờ", "price": 5_000, "duration": "3 giờ", "hours": 3},
@@ -372,6 +374,11 @@ def deposit_embed(base: int, transfer: int, oid: str) -> discord.Embed:
     e.add_field(
         name="🏛 Tài khoản",
         value=f"**{ACCOUNT_NAME}** · {BANK_DISPLAY}\n`{BANK_NUMBER}`",
+        inline=False,
+    )
+    e.add_field(
+        name="💳 Thanh toán",
+        value="**Tự Động** · **Nhanh Chóng** · **Uy Tín**",
         inline=False,
     )
     e.add_field(
@@ -749,9 +756,9 @@ def _lane_catalog(pk: str) -> str:
 
 def hub_embed() -> discord.Embed:
     e = discord.Embed(
-        title="🏪 Boutique Nexus · Auto License",
+        title="🏪 Boutique Shop · DucDuy BTQ",
         description=(
-            "**⊹ CỬA HÀNG LICENSE AOV ⊹**\n"
+            "**⊹ Shop Mua Key Tự Động ⊹**\n"
             "══════════════════════════\n"
             "Nạp QR · Chọn lane · Mua gói · Nhận key DM\n"
             "Không cần chờ admin — hệ thống **24/7**"
@@ -764,7 +771,7 @@ def hub_embed() -> discord.Embed:
         name="📞  Hỗ trợ khách hàng",
         value=(
             f"```\n{SUPPORT_TEXT}\n```\n"
-            "💳 Thanh toán: **VietQR** + SePay tự động\n"
+            "💳 Thanh toán: **Tự Động** · **Nhanh Chóng** · **Uy Tín**\n"
             "🔐 Key: gửi **tin nhắn riêng** sau khi mua"
         ),
         inline=False,
@@ -776,7 +783,7 @@ def hub_embed() -> discord.Embed:
         e.set_thumbnail(url=bot.user.display_avatar.url)
     if bot.user:
         e.set_author(
-            name="DUCDUY BOUTIQUE",
+            name="DucDuy BTQ",
             icon_url=bot.user.display_avatar.url,
         )
     return e
@@ -812,7 +819,7 @@ def vault_embed(pk: str) -> discord.Embed:
         title=f"{pv['emoji']}  {pv['label']} — Bảng giá",
         description=(
             f"_{pv['tagline']}_\n"
-            f"🛰️ Node: **{pv['server']}**\n"
+            f"☁️ **{pv['server']}**\n"
             "══════════════════\n"
             + "\n".join(lines)
             + "\n══════════════════"
@@ -834,7 +841,7 @@ def license_dm_embed(pv: dict, pkg: dict, keys: list[str]) -> discord.Embed:
         "```\n"
         f"{block}\n\n"
         f"⏱️ **Hạn:** {pkg['duration']}\n"
-        f"🛰️ **Node:** {pv['server']}\n\n"
+        f"☁️ **{pv['server']}**\n\n"
         "⚠️ Không chia sẻ key · một thiết bị"
     )
     e.set_footer(text="ducduy boutique · auto api")
@@ -854,13 +861,13 @@ class LaneSelect(discord.ui.Select):
                     label="Legit Drag",
                     value="legit_drag",
                     emoji="🎯",
-                    description="INOJ Cloud · Ghim ngực · từ 3.000đ",
+                    description="Legit Drag · Ghim ngực · từ 3.000đ",
                 ),
                 discord.SelectOption(
                     label="Aimbot Head",
                     value="aimbot_head",
                     emoji="🔫",
-                    description="AOV Duy Node · Ghim đầu · từ 5.000đ",
+                    description="Aimbot Head Exe · Ghim đầu · từ 5.000đ",
                 ),
             ],
             custom_id="boutique_lane_select",
@@ -1016,7 +1023,7 @@ class BuyModal(discord.ui.Modal):
             embed=discord.Embed(
                 title="⏳ Đang tạo license...",
                 description=(
-                    f"**{pv['label']}** → `{_api_base(p['product_key'])}`\n"
+                    f"☁️ **{pv['server']}** · {pv['label']}\n"
                     f"Gói **{p['duration']}** × `{q}`\nVui lòng đợi 10–30 giây."
                 ),
                 color=pv["accent"],
