@@ -15,6 +15,20 @@ from pathlib import Path
 
 VN_TZ = datetime.timezone(datetime.timedelta(hours=7))
 
+def _vn_now() -> datetime.datetime:
+    return datetime.datetime.now(VN_TZ)
+
+def _vn_now_str() -> str:
+    return _vn_now().strftime("%Y-%m-%d %H:%M:%S")
+
+def _clock_diag() -> str:
+    utc = datetime.datetime.now(datetime.timezone.utc)
+    vn = _vn_now()
+    return "UTC {} | VN {}".format(
+        utc.strftime("%d/%m/%Y %H:%M:%S"),
+        vn.strftime("%d/%m/%Y %H:%M:%S"),
+    )
+
 # ══════════════════════════════════════════
 # LOAD ENV
 # ══════════════════════════════════════════
@@ -64,11 +78,20 @@ C_LEGIT   = 0x3DFFA8
 C_AIMBOT  = 0xFF4FD8
 C_MUTED   = 0x7A8499
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
+class _VNLogFormatter(logging.Formatter):
+    """Log theo gio Viet Nam (de khong nham voi UTC trong aiohttp.access)."""
+
+    def formatTime(self, record, datefmt=None):
+        dt = datetime.datetime.fromtimestamp(record.created, tz=VN_TZ)
+        return dt.strftime(datefmt or "%d/%m/%Y %H:%M:%S")
+
+_handler = logging.StreamHandler()
+_handler.setFormatter(
+    _VNLogFormatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 )
+logging.basicConfig(level=logging.INFO, handlers=[_handler])
+# Health-check Render (HEAD /) — ghi UTC ngay 20/05 trong log cu, gay hieu nham
+logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
 log = logging.getLogger("shop")
 
 _sepay_auth_failed = False
@@ -345,15 +368,32 @@ def _alloc_unique_transfer_amount(base_amount: int) -> int:
 def create_deposit_order(user_id: int, base_amount: int) -> tuple[str, int, int]:
     order_id = make_order_id()
     transfer_amount = _alloc_unique_transfer_amount(base_amount)
+    now = time.time()
     orders[order_id] = {
         "user_id":         user_id,
         "base_amount":     base_amount,
         "transfer_amount": transfer_amount,
         "amount":          transfer_amount,
         "paid":            False,
-        "created_at":      time.time(),
+        "created_at":      now,
+        "created_at_vn":   _vn_now_str(),
     }
     return order_id, base_amount, transfer_amount
+
+def _expire_stale_pending_orders() -> int:
+    """Xoa don cho qua han — tranh don thang 5 khop GD thang 6."""
+    n = 0
+    for oid, o in list(orders.items()):
+        if o.get("paid"):
+            continue
+        if _order_expired(o):
+            o["paid"] = True
+            o["expired"] = True
+            n += 1
+            log.info("Het han don %s (tao %s)", oid, o.get("created_at_vn", "?"))
+    if n:
+        _save_data()
+    return n
 
 def _order_expired(order: dict) -> bool:
     created = order.get("created_at", 0)
@@ -995,8 +1035,8 @@ class DepositModal(discord.ui.Modal, title="💳  Nạp tiền"):
         )
         _save_data()
         log.info(
-            "Tao don: %s | CK %d | +%d | user %s",
-            order_id, transfer_amount, base_amount, interaction.user.id,
+            "Tao don: %s | CK %d | +%d | user %s | %s",
+            order_id, transfer_amount, base_amount, interaction.user.id, _vn_now_str(),
         )
 
         if not BANK_NUMBER:
@@ -1524,10 +1564,18 @@ async def on_command_error(ctx: commands.Context, error: Exception):
 
 _webhook_started = False
 
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def clock(ctx: commands.Context):
+    await ctx.send("🕐 **Dong ho server:** " + _clock_diag(), delete_after=20)
+
 @bot.event
 async def on_ready():
     global _webhook_started
-    log.info("Bot online: %s (ID: %d)", bot.user, bot.user.id)
+    log.info("Bot online: %s (ID: %d) | %s", bot.user, bot.user.id, _clock_diag())
+    expired = _expire_stale_pending_orders()
+    if expired:
+        log.info("Da dong %d don nap qua han", expired)
 
     if not _webhook_started:
         try:
