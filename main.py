@@ -51,6 +51,10 @@ WEBHOOK_PORT   = int(os.getenv("PORT") or os.getenv("WEBHOOK_PORT") or "8080")
 SHOP_THUMBNAIL = _clean_env(os.getenv("SHOP_THUMBNAIL", ""))
 SUPPORT_TEXT   = _clean_env(os.getenv("SUPPORT_TEXT", "Ticket server · DM admin"))
 DEPOSIT_MSG_TTL = int(os.getenv("DEPOSIT_MSG_TTL", "120"))
+# 0 = chuyển đúng số (3000). 1 = mỗi đơn +1..999đ (3001, 3002...) tránh trùng đơn.
+DEPOSIT_UNIQUE_SUFFIX = os.getenv("DEPOSIT_UNIQUE_SUFFIX", "0").strip().lower() in (
+    "1", "true", "yes", "on",
+)
 
 # Theme — Boutique Nexus (không dùng layout shop clone)
 C_NEXUS   = 0xF5C451
@@ -328,7 +332,9 @@ def _pending_transfer_amounts() -> set[int]:
     return s
 
 def _alloc_unique_transfer_amount(base_amount: int) -> int:
-    """Mỗi đơn +1..999đ để nhiều người nạp cùng mức vẫn khớp chính xác."""
+    """Mỗi đơn +1..999đ (nếu DEPOSIT_UNIQUE_SUFFIX=1) để tránh trùng đơn cùng số tiền."""
+    if not DEPOSIT_UNIQUE_SUFFIX:
+        return base_amount
     used = _pending_transfer_amounts()
     for offset in range(1, 1000):
         t = base_amount + offset
@@ -797,17 +803,33 @@ async def poll_sepay():
     _poll_last_diag = now
 
     need_map = {o: _order_transfer_amount(orders[o]) for o in pending}
+    credit_map = {o: _order_credit_amount(orders[o]) for o in pending}
     if not txns:
         log.warning(
-            "Poll: SePay khong co GD (hoac sai tai khoan) | don cho=%s | can CK=%s",
+            "Poll: SePay khong co GD | don=%s | can CK=%s",
             pending[:5], need_map,
+        )
+        return
+
+    # Tìm trong 80 GD gần nhất có số tiền trùng đơn chờ không
+    hits = []
+    for txn in txns:
+        amt = _get_txn_amount(txn)
+        for oid in pending:
+            need = need_map[oid]
+            if amt == need or (amt == credit_map[oid] and credit_map[oid] != need):
+                hits.append((oid, amt, _get_txn_text(txn)[:45]))
+    if hits:
+        log.warning(
+            "Poll: co GD %s VND trung so don nhung chua khop — xem transferType/processed: %s",
+            hits[0][1], hits[:3],
         )
         return
 
     t0 = txns[0]
     log.info(
-        "Poll chua khop | don=%s | can=%s | txn moi=%s | text=%.50s",
-        pending[:5], need_map, _get_txn_amount(t0), _get_txn_text(t0),
+        "Poll: chua thay CK don %s | can CK=%s | GD ngan hang moi nhat=%s (GD khac) | %.40s",
+        pending[:3], need_map, _get_txn_amount(t0), _get_txn_text(t0),
     )
 
 @poll_sepay.before_loop
