@@ -375,8 +375,17 @@ def build_deposit_embed(base_amount: int, transfer_amount: int, order_id: str) -
     e = discord.Embed(
         title="💳  Thông tin nạp tiền",
         description=(
-            "⚠️ Phải chuyển **đúng số tiền bên dưới** (có thêm vài đồng để hệ thống nhận diện đơn của bạn).\n"
-            "Sau khi nhận tiền, bot cộng **`{:,}` VNĐ** vào ví.".format(base_amount)
+            "⚠️ Chuyển **đúng số tiền** và **đúng nội dung** `"
+            + order_id
+            + "` bên dưới.\n"
+            + "Sau khi nhận tiền, bot cộng **`{:,}` VNĐ** vào ví.".format(base_amount)
+            + (
+                "\n🔢 Mỗi đơn một số CK riêng (thêm vài đồng) — **không** làm tròn."
+                if DEPOSIT_UNIQUE_SUFFIX
+                else "\n📌 Bắt buộc ghi nội dung `"
+                + order_id
+                + "` khi chuyển (MSB hay cắt mã nếu không ghi)."
+            )
         ),
         color=C_NEXUS,
     )
@@ -483,14 +492,12 @@ def _get_txn_text(txn: dict) -> str:
     return " ".join(parts).upper()
 
 def _order_id_in_text(oid: str, text: str) -> bool:
+    """Chi nhan dung ma NAP... trong noi dung — khong doan so trong STK (tranh khop nham)."""
     if not text:
         return False
     compact = re.sub(r"[^A-Z0-9]", "", text.upper())
     oid_up = oid.upper()
-    if oid_up in text.upper() or oid_up in compact:
-        return True
-    digits = oid_up.replace("NAP", "")
-    if len(digits) >= 8 and digits in compact:
+    if oid_up in compact:
         return True
     for m in re.findall(r"NAP\d{8,}", compact):
         if m == oid_up:
@@ -501,35 +508,40 @@ def _get_txn_date(txn: dict) -> str:
     return str(txn.get("transactionDate") or txn.get("transaction_date") or "")
 
 def _txn_timestamp_or_none(txn: dict) -> float | None:
-    """Thoi gian GD tu SePay. None neu khong parse duoc."""
+    """SePay gui gio Viet Nam (YYYY-MM-DD HH:mm:ss) — chi parse GMT+7."""
     s = _get_txn_date(txn).strip()
     if not s:
         return None
     s = s[:19]
-    candidates: list[float] = []
-    for tz in (VN_TZ, datetime.timezone.utc):
-        try:
-            dt = datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=tz)
-            candidates.append(dt.timestamp())
-        except Exception:
-            pass
-    if not candidates:
+    try:
+        dt = datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=VN_TZ)
+        return dt.timestamp()
+    except Exception:
         return None
-    return min(candidates)
+
+# GD phai ghi nhan SAU khi tao don (tranh khop GD 2k cu / cung giay)
+_TXN_MIN_DELAY_AFTER_ORDER = 2
 
 def _txn_matches_order_time(txn: dict, order: dict) -> bool:
-    """GD phai xay ra SAU khi tao don (tranh khop lai GD 2k/5k cu trong SePay)."""
     created = float(order.get("created_at") or 0)
     if created <= 0:
-        return True
+        return False
     ts = _txn_timestamp_or_none(txn)
     if ts is None:
         return False
-    if ts < created - 120:
+    if ts < created + _TXN_MIN_DELAY_AFTER_ORDER:
         return False
     if ts > created + ORDER_EXPIRE + 600:
         return False
     return True
+
+def _amount_match_ok(txn: dict, order: dict, oid: str, text: str) -> bool:
+    """Khop so tien: bat buoc co thoi gian hop le; so tron thi can ma NAP trong CK."""
+    if not _txn_matches_order_time(txn, order):
+        return False
+    if DEPOSIT_UNIQUE_SUFFIX:
+        return True
+    return _order_id_in_text(oid, text)
 
 def _txn_fingerprint(txn: dict) -> str:
     tid = str(txn.get("id") or "").strip()
@@ -577,12 +589,11 @@ def _find_order_for_txn(txn: dict) -> tuple[str | None, str | None]:
     text = _get_txn_text(txn)
     pending = _pending_orders()
 
-    # Ưu tiên: mã NAP trong nội dung CK
+    # Ưu tiên: mã NAP trong nội dung CK + GD sau lúc tạo đơn
     for oid, order in sorted(pending, key=lambda x: x[1].get("created_at", 0), reverse=True):
         if not _order_id_in_text(oid, text):
             continue
-        ts = _txn_timestamp_or_none(txn)
-        if ts is not None and not _txn_matches_order_time(txn, order):
+        if not _txn_matches_order_time(txn, order):
             continue
         need = _order_transfer_amount(order)
         credit = _order_credit_amount(order)
@@ -590,12 +601,12 @@ def _find_order_for_txn(txn: dict) -> tuple[str | None, str | None]:
             log.info("Khop MA DON %s | CK %d | +%d | %.40s", oid, amount, credit, text)
             return oid, fp
 
-    # Khớp theo số tiền — BẮT BUỘC GD sau khi tạo đơn (tránh dùng lại GD 2k cũ)
+    # Khớp theo số tiền (unique hoặc có NAP trong CK)
     for oid, order in sorted(pending, key=lambda x: x[1].get("created_at", 0), reverse=True):
         need = _order_transfer_amount(order)
         if amount != need:
             continue
-        if not _txn_matches_order_time(txn, order):
+        if not _amount_match_ok(txn, order, oid, text):
             continue
         credit = _order_credit_amount(order)
         if _order_id_in_text(oid, text):
@@ -604,13 +615,13 @@ def _find_order_for_txn(txn: dict) -> tuple[str | None, str | None]:
             log.info("Khop SO TIEN %s | CK %d | +%d | %.40s", oid, need, credit, text)
         return oid, fp
 
-    # Fallback base amount — vẫn phải sau lúc tạo đơn
+    # Fallback base amount (khi dung unique suffix)
     for oid, order in sorted(pending, key=lambda x: x[1].get("created_at", 0), reverse=True):
         credit = _order_credit_amount(order)
         need = _order_transfer_amount(order)
         if amount != credit or credit == need:
             continue
-        if not _txn_matches_order_time(txn, order):
+        if not _amount_match_ok(txn, order, oid, text):
             continue
         same = [o for o, ord in pending if _order_credit_amount(ord) == credit]
         if len(same) == 1 and same[0][0] == oid:
@@ -629,6 +640,30 @@ async def _fetch_sepay_transactions(limit: int = 80) -> tuple[int, list[dict]]:
         return status, []
     txns = [t for t in _sepay_transactions(data) if _txn_matches_bank(t)]
     return status, txns
+
+async def _mark_stale_sepay_txns_processed(max_age_sec: int = 300):
+    """Đánh dấu GD SePay cũ đã xử lý — tránh dùng lại GD 2k/5k có sẵn trong API."""
+    if not SEPAY_TOKEN or _sepay_auth_failed:
+        return
+    status, txns = await _fetch_sepay_transactions(100)
+    if status != 200:
+        return
+    now = time.time()
+    added = 0
+    for txn in txns:
+        ts = _txn_timestamp_or_none(txn)
+        if ts is not None and ts >= now - max_age_sec:
+            continue
+        fp = _txn_fingerprint(txn)
+        if fp not in processed_txns:
+            processed_txns.add(fp)
+            added += 1
+    if added:
+        _save_data()
+        log.info(
+            "Da khoa %d GD SePay cu (truoc %d phut) — khong cong nham vao don moi",
+            added, max_age_sec // 60,
+        )
 
 async def _sepay_get(params: dict | None = None) -> tuple[int, dict]:
     """Goi SePay API; tra (status, json)."""
@@ -847,9 +882,17 @@ async def poll_sepay():
         return
 
     t0 = txns[0]
+    t0_ts = _txn_timestamp_or_none(t0)
+    hint = ""
+    for oid in pending[:3]:
+        o = orders.get(oid, {})
+        created = float(o.get("created_at") or 0)
+        if t0_ts and created and t0_ts < created + _TXN_MIN_DELAY_AFTER_ORDER:
+            hint = " | GD moi nhat XAY RA TRUOC don — can CK moi sau khi tao don"
+            break
     log.info(
-        "Poll: chua thay CK don %s | can CK=%s | GD ngan hang moi nhat=%s (GD khac) | %.40s",
-        pending[:3], need_map, _get_txn_amount(t0), _get_txn_text(t0),
+        "Poll: chua khop don %s | can CK=%s | GD moi=%s%s | %.35s",
+        pending[:3], need_map, _get_txn_amount(t0), hint, _get_txn_text(t0),
     )
 
 @poll_sepay.before_loop
@@ -1496,6 +1539,11 @@ async def on_ready():
     if not poll_sepay.is_running():
         poll_sepay.start()
         log.info("poll_sepay da bat (moi %ds)", poll_sepay.seconds)
+
+    try:
+        await _mark_stale_sepay_txns_processed(300)
+    except Exception as e:
+        log.warning("Khoa GD SePay cu loi: %s", e)
 
     pending_n = len([o for o in orders.values() if not o.get("paid") and not _order_expired(o)])
     if pending_n:
