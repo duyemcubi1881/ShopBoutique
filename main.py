@@ -95,6 +95,7 @@ logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
 log = logging.getLogger("shop")
 
 _sepay_auth_failed = False
+_sepay_skew_sec: float = 0.0
 
 # ══════════════════════════════════════════
 # BOT SETUP
@@ -561,6 +562,15 @@ def _txn_timestamp_or_none(txn: dict) -> float | None:
 
 # GD phai ghi nhan SAU khi tao don (tranh khop GD 2k cu / cung giay)
 _TXN_MIN_DELAY_AFTER_ORDER = 2
+_CLOCK_SKEW_WARN_SEC = 3600
+
+def _txn_after_order_vn(txn: dict, order: dict) -> bool:
+    """So sanh chuoi ngay SePay vs luc tao don (VN) — dung khi Render lech ngay."""
+    tsd = _get_txn_date(txn).strip()[:19]
+    cr = str(order.get("created_at_vn") or "")[:19]
+    if not tsd or not cr:
+        return False
+    return tsd >= cr
 
 def _txn_matches_order_time(txn: dict, order: dict) -> bool:
     created = float(order.get("created_at") or 0)
@@ -569,11 +579,34 @@ def _txn_matches_order_time(txn: dict, order: dict) -> bool:
     ts = _txn_timestamp_or_none(txn)
     if ts is None:
         return False
+
+    # Render chậm/sai ngày so với SePay: so theo chuỗi giờ VN từ SePay
+    if abs(_sepay_skew_sec) >= _CLOCK_SKEW_WARN_SEC:
+        return _txn_after_order_vn(txn, order)
+
     if ts < created + _TXN_MIN_DELAY_AFTER_ORDER:
         return False
     if ts > created + ORDER_EXPIRE + 600:
         return False
     return True
+
+async def _refresh_sepay_clock_skew():
+    global _sepay_skew_sec
+    status, txns = await _fetch_sepay_transactions(5)
+    if status != 200 or not txns:
+        return
+    ts = _txn_timestamp_or_none(txns[0])
+    if ts is None:
+        return
+    _sepay_skew_sec = ts - time.time()
+    if abs(_sepay_skew_sec) >= _CLOCK_SKEW_WARN_SEC:
+        log.warning(
+            "DONG HO LECH %.1f gio | SePay GD moi: %s | server VN: %s | "
+            "Khop don theo gio SePay (khong theo dong ho Render).",
+            _sepay_skew_sec / 3600,
+            _get_txn_date(txns[0]),
+            _vn_now_str(),
+        )
 
 def _amount_match_ok(txn: dict, order: dict, oid: str, text: str) -> bool:
     """Khop so tien: bat buoc co thoi gian hop le; so tron thi can ma NAP trong CK."""
@@ -672,6 +705,12 @@ def _find_order_for_txn(txn: dict) -> tuple[str | None, str | None]:
             return oid, fp
 
     return None, None
+
+async def _refresh_sepay_clock_skew_safe():
+    try:
+        await _refresh_sepay_clock_skew()
+    except Exception as e:
+        log.warning("Kiem tra lech gio SePay loi: %s", e)
 
 async def _fetch_sepay_transactions(limit: int = 80) -> tuple[int, list[dict]]:
     """Lấy GD SePay — không lọc account_number trên API (tránh lọc sai format MSB)."""
@@ -922,17 +961,16 @@ async def poll_sepay():
         return
 
     t0 = txns[0]
-    t0_ts = _txn_timestamp_or_none(t0)
+    recent_amts = [_get_txn_amount(t) for t in txns[:8]]
     hint = ""
     for oid in pending[:3]:
-        o = orders.get(oid, {})
-        created = float(o.get("created_at") or 0)
-        if t0_ts and created and t0_ts < created + _TXN_MIN_DELAY_AFTER_ORDER:
-            hint = " | GD moi nhat XAY RA TRUOC don — can CK moi sau khi tao don"
+        need = need_map.get(oid, 0)
+        if need not in recent_amts:
+            hint = " | SePay CHUA CO GD {}d — can quet QR CK dung so".format(need)
             break
     log.info(
-        "Poll: chua khop don %s | can CK=%s | GD moi=%s%s | %.35s",
-        pending[:3], need_map, _get_txn_amount(t0), hint, _get_txn_text(t0),
+        "Poll: chua khop %s | can CK=%s | 8 GD gan nhat=%s%s | moi nhat %.30s",
+        pending[:3], need_map, recent_amts, hint, _get_txn_text(t0),
     )
 
 @poll_sepay.before_loop
@@ -1590,6 +1628,7 @@ async def on_ready():
 
     try:
         await _mark_stale_sepay_txns_processed(300)
+        await _refresh_sepay_clock_skew_safe()
     except Exception as e:
         log.warning("Khoa GD SePay cu loi: %s", e)
 
