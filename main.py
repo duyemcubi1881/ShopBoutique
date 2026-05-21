@@ -63,7 +63,7 @@ WEBHOOK_PORT = int(os.getenv("PORT") or os.getenv("WEBHOOK_PORT") or "8080")
 SHOP_THUMBNAIL = _clean_env(os.getenv("SHOP_THUMBNAIL", ""))
 SUPPORT_TEXT = _clean_env(os.getenv("SUPPORT_TEXT", "Ticket server · DM admin"))
 DEPOSIT_MSG_TTL = int(os.getenv("DEPOSIT_MSG_TTL", "120"))
-MIN_DEPOSIT = int(os.getenv("MIN_DEPOSIT", "1000"))
+MIN_DEPOSIT = int(os.getenv("MIN_DEPOSIT", "5000"))
 USE_UNIQUE_AMOUNT = os.getenv("DEPOSIT_UNIQUE_SUFFIX", "1").lower() not in ("0", "false", "no")
 
 API_AIMBOT_BASE = _clean_env(os.getenv("API_AIMBOT_BASE", "https://aovduy.onrender.com")).rstrip("/")
