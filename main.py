@@ -750,7 +750,7 @@ def hub_embed() -> discord.Embed:
         ),
         inline=False,
     )
-    e.set_footer(text="▼ Chọn lane ở menu dưới · Nạp tiền trước khi mua")
+    e.set_footer(text="▼ Chọn dịch vụ ở menu dưới · Nạp tiền trước khi mua")
     if SHOP_THUMBNAIL:
         e.set_image(url=SHOP_THUMBNAIL)
     elif bot.user:
@@ -770,7 +770,7 @@ def guide_embed() -> discord.Embed:
             "**Bước 1 — Nạp tiền**\n"
             "Bấm `Nạp tiền` → nhập số VNĐ → quét QR → chuyển **đúng số CK** + mã `NAP...`\n\n"
             "**Bước 2 — Mua license**\n"
-            "Menu `Chọn lane license` → Regedit Lock V1 → chọn gói → xác nhận\n\n"
+            "Menu `Chọn dịch vụ` → Regedit Lock V1 → chọn gói → xác nhận\n\n"
             "**Bước 3 — Nhận key**\n"
             "Mở DM với bot — key gửi tự động trong vài giây\n\n"
             "══════════════════════\n"
@@ -827,7 +827,7 @@ class LaneSelect(discord.ui.Select):
 
     def __init__(self):
         super().__init__(
-            placeholder="📌  Chọn lane license...",
+            placeholder="📌  Chọn dịch vụ...",
             min_values=1,
             max_values=1,
             options=[
