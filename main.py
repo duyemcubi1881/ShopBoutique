@@ -61,10 +61,7 @@ DEPOSIT_MSG_TTL = int(os.getenv("DEPOSIT_MSG_TTL", "120"))
 MIN_DEPOSIT = int(os.getenv("MIN_DEPOSIT", "5000"))
 USE_UNIQUE_AMOUNT = os.getenv("DEPOSIT_UNIQUE_SUFFIX", "1").lower() not in ("0", "false", "no")
 
-API_AIMBOT_BASE = _clean_env(os.getenv("API_AIMBOT_BASE", "https://aovduy.onrender.com")).rstrip("/")
-API_LEGIT_BASE = _clean_env(os.getenv("API_LEGIT_BASE", "https://api2-inoj.onrender.com")).rstrip("/")
-# Fallback to existing api urls if API_REGEDIT_BASE is not explicitly defined in env
-API_REGEDIT_BASE = _clean_env(os.getenv("API_REGEDIT_BASE") or os.getenv("API_AIMBOT_BASE") or os.getenv("API_LEGIT_BASE") or "https://aovduy.onrender.com").rstrip("/")
+API_REGEDIT_BASE = _clean_env(os.getenv("API_REGEDIT_BASE") or "https://api3-msww.onrender.com").rstrip("/")
 API_ADMIN_USER = _clean_env(os.getenv("API_ADMIN_USER"))
 API_ADMIN_PASS = _clean_env(os.getenv("API_ADMIN_PASS"))
 
@@ -738,7 +735,7 @@ def hub_embed() -> discord.Embed:
         description=(
             "**⊹ Shop Mua Key Tự Động ⊹**\n"
             "══════════════════════════\n"
-            "Nạp QR · Mua gói · Nhận key DM\n"
+            "Nạp QR · Chọn lane · Mua gói · Nhận key DM\n"
             "Không cần chờ admin — hệ thống **24/7**"
         ),
         color=C_SHOP,
@@ -753,7 +750,7 @@ def hub_embed() -> discord.Embed:
         ),
         inline=False,
     )
-    e.set_footer(text="▼ Chọn chức năng ở dưới · Nạp tiền trước khi mua")
+    e.set_footer(text="▼ Chọn lane ở menu dưới · Nạp tiền trước khi mua")
     if SHOP_THUMBNAIL:
         e.set_image(url=SHOP_THUMBNAIL)
     elif bot.user:
@@ -773,7 +770,7 @@ def guide_embed() -> discord.Embed:
             "**Bước 1 — Nạp tiền**\n"
             "Bấm `Nạp tiền` → nhập số VNĐ → quét QR → chuyển **đúng số CK** + mã `NAP...`\n\n"
             "**Bước 2 — Mua license**\n"
-            "Bấm `Mua Regedit Lock V1` → nhập số lượng → xác nhận\n\n"
+            "Menu `Chọn lane license` → Regedit Lock V1 → chọn gói → xác nhận\n\n"
             "**Bước 3 — Nhận key**\n"
             "Mở DM với bot — key gửi tự động trong vài giây\n\n"
             "══════════════════════\n"
@@ -784,6 +781,26 @@ def guide_embed() -> discord.Embed:
         color=C_PANEL,
     )
     e.set_footer(text="DUCDUY BOUTIQUE · Hỗ trợ: " + SUPPORT_TEXT[:40])
+    return e
+
+
+def vault_embed(pk: str) -> discord.Embed:
+    pv = PRODUCTS[pk]
+    lines = []
+    for i, p in enumerate(pv["packages"], 1):
+        lines.append(f"`{i}.` ⏳ **{p['duration']}** ─ **{p['price']:,} VNĐ**")
+    e = discord.Embed(
+        title=f"{pv['emoji']}  {pv['label']} — Bảng giá",
+        description=(
+            f"_{pv['tagline']}_\n"
+            f"☁️ **{pv['server']}**\n"
+            "══════════════════\n"
+            + "\n".join(lines)
+            + "\n══════════════════"
+        ),
+        color=pv["accent"],
+    )
+    e.set_footer(text="Chọn gói tại menu · Trừ tiền ví boutique")
     return e
 
 
@@ -805,21 +822,71 @@ def license_dm_embed(pv: dict, pkg: dict, keys: list[str]) -> discord.Embed:
     return e
 
 
+class LaneSelect(discord.ui.Select):
+    """Menu chọn lane — layout tương tự shop panel nhưng nội dung boutique."""
+
+    def __init__(self):
+        super().__init__(
+            placeholder="📌  Chọn lane license...",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label="Regedit Lock V1",
+                    value="regedit_lock",
+                    emoji="🔒",
+                    description="Regedit Lock V1 · Khóa tâm · 240.000đ",
+                ),
+            ],
+            custom_id="boutique_lane_select",
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        pk = self.values[0]
+        await interaction.response.send_message(
+            embed=vault_embed(pk),
+            view=VaultView(pk),
+            ephemeral=True,
+        )
+
+
+class PackageSelect(discord.ui.Select):
+    def __init__(self, pk: str):
+        pv = PRODUCTS[pk]
+        super().__init__(
+            placeholder="📦  Chọn gói thời gian...",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label=f"{p['duration']}  ·  {p['price']:,}đ",
+                    value=p["id"],
+                    description=p["name"][:100],
+                    emoji="⚡",
+                )
+                for p in pv["packages"]
+            ],
+            row=0,
+        )
+        self.pk = pk
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(BuyModal(self.values[0]))
+
+
+class VaultView(discord.ui.View):
+    def __init__(self, pk: str):
+        super().__init__(timeout=300)
+        self.add_item(PackageSelect(pk))
+
+
 class BoutiquePanelView(discord.ui.View):
     """Panel chính: dropdown lane + 3 nút (nạp / số dư / HD)."""
 
     def __init__(self):
         super().__init__(timeout=None)
-
-    @discord.ui.button(
-        label="Mua Regedit Lock V1",
-        emoji="🔒",
-        style=discord.ButtonStyle.danger,
-        custom_id="boutique_buy_regedit",
-        row=0,
-    )
-    async def buy_regedit(self, interaction: discord.Interaction, _):
-        await interaction.response.send_modal(BuyModal("rl_550d"))
+        self.add_item(LaneSelect())
 
     @discord.ui.button(
         label="Nạp tiền",
