@@ -735,12 +735,26 @@ def hub_embed() -> discord.Embed:
         description=(
             "**⊹ Shop Mua Key Tự Động ⊹**\n"
             "══════════════════════════\n"
-            "Nạp QR · Chọn lane · Mua gói · Nhận key DM\n"
+            "Nạp QR · Chọn dịch vụ · Mua gói · Nhận key DM\n"
             "Không cần chờ admin — hệ thống **24/7**"
         ),
         color=C_SHOP,
     )
-    e.add_field(name="🔒  REGEDIT LOCK V1", value=_lane_catalog("regedit_lock"), inline=False)
+    e.add_field(
+        name="🖥️  DỊCH VỤ HỖ TRỢ CHƠI GAME TRÊN PC",
+        value=(
+            "```yaml\n"
+            "📌 Các sản phẩm chính:\n"
+            "  • Regedit Lock: Hỗ trợ kéo tâm tốt nhất thị trường\n"
+            "  • Tối ưu thiết bị: Tăng FPS, giảm lag, chơi game mượt mà\n"
+            "\n"
+            "💻 Developer: Ngô Đức Duy\n"
+            "⭐ Tiêu chí: Giá rẻ - Uy tín - Chất lượng\n"
+            "🤝 Cam kết: Có tác dụng\n"
+            "```"
+        ),
+        inline=False
+    )
     e.add_field(
         name="📞  Hỗ trợ khách hàng",
         value=(
@@ -837,6 +851,30 @@ class LaneSelect(discord.ui.Select):
                     emoji="🔒",
                     description="Regedit Lock V1 · Khóa tâm · 240.000đ",
                 ),
+                discord.SelectOption(
+                    label="Regedit Lock V2",
+                    value="regedit_lock_v2",
+                    emoji="🔒",
+                    description="Đang update...",
+                ),
+                discord.SelectOption(
+                    label="Regedit Lock V3",
+                    value="regedit_lock_v3",
+                    emoji="🔒",
+                    description="Đang update...",
+                ),
+                discord.SelectOption(
+                    label="Tối ưu Thiết Bị",
+                    value="toi_uu_tb",
+                    emoji="⚡",
+                    description="Đang update...",
+                ),
+                discord.SelectOption(
+                    label="Tối Ưu Thiết Bị Pre",
+                    value="toi_uu_tb_pre",
+                    emoji="⚡",
+                    description="Đang update...",
+                ),
             ],
             custom_id="boutique_lane_select",
             row=0,
@@ -844,6 +882,11 @@ class LaneSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         pk = self.values[0]
+        if pk in ("regedit_lock_v2", "regedit_lock_v3", "toi_uu_tb", "toi_uu_tb_pre"):
+            return await interaction.response.send_message(
+                "❌ Dịch vụ này hiện đang được cập nhật, vui lòng quay lại sau!",
+                ephemeral=True
+            )
         await interaction.response.send_message(
             embed=vault_embed(pk),
             view=VaultView(pk),
