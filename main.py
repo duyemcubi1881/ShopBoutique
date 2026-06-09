@@ -882,7 +882,16 @@ class PackageSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(BuyModal(self.values[0]))
+        try:
+            await interaction.response.send_modal(BuyModal(self.values[0]))
+        except Exception as e:
+            log.error("PackageSelect callback loi: %s", e)
+            try:
+                await interaction.response.send_message(
+                    "Co loi xay ra, thu lai sau.", ephemeral=True
+                )
+            except Exception:
+                pass
 
 
 class ShopPanelView(discord.ui.View):
@@ -972,7 +981,23 @@ class BuyModal(discord.ui.Modal):
         p = PKG[pkg_id]
         super().__init__(title=f"Mua {p['name']}")
 
+    async def _safe_edit(self, interaction: discord.Interaction, embed: discord.Embed) -> None:
+        """
+        Gui ket qua an toan — LUON ephemeral.
+        Thu edit truoc, neu that bai thi dung followup (van ephemeral).
+        KHONG bao gio de tin nhan lo ra channel.
+        """
+        try:
+            await interaction.edit_original_response(embed=embed)
+        except Exception as e:
+            log.warning("edit_original_response that bai: %s — dung followup", e)
+            try:
+                await interaction.followup.send(embed=embed, ephemeral=True)
+            except Exception as e2:
+                log.error("followup cung that bai: %s", e2)
+
     async def on_submit(self, interaction: discord.Interaction):
+        # --- Validate so luong ---
         try:
             q = max(1, int(self.qty.value.strip()))
         except ValueError:
@@ -985,29 +1010,38 @@ class BuyModal(discord.ui.Modal):
         uid   = interaction.user.id
         bal   = get_balance(uid)
 
+        # --- Kiem tra so du ---
         if bal < total:
             return await interaction.response.send_message(
                 f"Khong du tien.\n"
                 f"So du: {bal:,} · Can: {total:,} · Thieu: {total - bal:,} VND",
                 ephemeral=True,
             )
+
+        # --- Kiem tra API ---
         if not API_ADMIN_USER or not API_ADMIN_PASS:
             return await interaction.response.send_message(
                 "Bot chua cau hinh API admin.", ephemeral=True
             )
 
-        await interaction.response.defer(ephemeral=True)
-        await interaction.edit_original_response(
-            embed=discord.Embed(
-                title="Dang tao license...",
+        # --- Defer PHAI la ephemeral=True ---
+        # thinking=False de tranh discord hien "Bot dang suy nghi..." cong khai
+        await interaction.response.defer(ephemeral=True, thinking=False)
+
+        # Hien trang thai cho (chi nguoi mua thay)
+        await self._safe_edit(
+            interaction,
+            discord.Embed(
+                title="⏳  Đang tạo license...",
                 description=(
-                    f"AimLock Pro · Goi {p['duration']} x{q}\n"
-                    "Vui long doi 10-30 giay (Render can wake up)."
+                    f"🎯 AimLock Pro · Gói {p['duration']} × {q}\n"
+                    "Vui lòng đợi 10–30 giây..."
                 ),
                 color=C_AIMLOCK,
-            )
+            ),
         )
 
+        # --- Tru tien & tao key ---
         deduct_balance(uid, total)
         keys: list[str] = []
         for _ in range(q):
@@ -1015,42 +1049,51 @@ class BuyModal(discord.ui.Modal):
             if k:
                 keys.append(k)
             else:
+                # Hoan tien phan chua tao duoc
                 add_balance(uid, p["price"] * (q - len(keys)))
                 break
 
         new_bal = get_balance(uid)
         paid    = p["price"] * len(keys)
 
+        # --- Build embed ket qua ---
         if keys:
             em = discord.Embed(
-                title="GIAO DICH HOAN TAT",
+                title="✅  Giao dịch hoàn tất",
                 description=(
-                    f"{p['name']}\n"
-                    f"Thoi han: {p['duration']} · So key: {len(keys)}\n"
-                    f"Tru: {paid:,} VND · Vi con: {new_bal:,} VND\n\n"
-                    "Key da gui vao DM!"
+                    f"🎯 **{p['name']}**\n"
+                    f"⏱️ Hạn: **{p['duration']}** · 🔢 Key: **{len(keys)}**\n"
+                    f"💸 Trừ: **{paid:,} VNĐ** · 💰 Ví còn: **{new_bal:,} VNĐ**\n\n"
+                    "📩 Key đã gửi vào **DM** của bạn!"
                 ),
-                color=C_AIMLOCK,
+                color=C_GREEN,
             )
         else:
             em = discord.Embed(
-                title="Khong tao duoc key",
+                title="❌  Không tạo được key",
                 description=(
-                    "API server dang ngu hoac loi.\n"
-                    "Da hoan tien vao vi. Thu lai sau 1 phut."
+                    "API server đang ngủ hoặc lỗi.\n"
+                    "✅ Đã hoàn tiền vào ví. Thử lại sau 1 phút."
                 ),
                 color=0xE74C3C,
             )
 
-        await interaction.edit_original_response(embed=em)
+        # Gui ket qua (van ephemeral — chi nguoi mua thay)
+        await self._safe_edit(interaction, em)
 
+        # --- Gui key qua DM ---
         if keys:
             try:
                 await interaction.user.send(embed=license_dm_embed(p, keys))
             except discord.Forbidden:
-                await interaction.followup.send(
-                    "Bat DM de nhan key!", ephemeral=True
-                )
+                # DM bi dong — gui ephemeral followup de bao
+                try:
+                    await interaction.followup.send(
+                        "⚠️ Không gửi được DM! Hãy bật tin nhắn riêng rồi liên hệ admin.",
+                        ephemeral=True,
+                    )
+                except Exception:
+                    pass
 
 
 # ─────────────────────────────────────────────────────────────
