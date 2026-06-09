@@ -1,12 +1,3 @@
-Bạn **không cần phải sửa đổi file `.env` cũ** của mình. 
-
-Mã nguồn mới của [main.py](file:///C:/Users/ducdu/.gemini/antigravity/scratch/discord_shop_bot/main.py) được thiết kế **tương thích hoàn toàn 100% với file `.env` cũ**. Bot vẫn sẽ tự động đọc các cấu hình cũ của bạn (như `DISCORD_TOKEN`, `SEPAY_TOKEN`, `BANK_NUMBER`, `API_AIMBOT_BASE`, `API_ADMIN_USER`, `API_ADMIN_PASS`,...) mà không gặp bất kỳ lỗi nào. Các khóa môi trường không dùng nữa (như `API_LEGIT_BASE`) sẽ được bot tự động bỏ qua một cách an toàn.
-
-Bạn chỉ cần lấy toàn bộ mã nguồn của [main.py](file:///C:/Users/ducdu/.gemini/antigravity/scratch/discord_shop_bot/main.py) mới và đè lên file `main.py` cũ của bạn là chạy được ngay.
-
-Dưới đây là toàn bộ code [main.py](file:///C:/Users/ducdu/.gemini/antigravity/scratch/discord_shop_bot/main.py) hoàn chỉnh để bạn tiện sao chép (copy-paste):
-
-```python
 from __future__ import annotations
 
 import asyncio
@@ -1155,4 +1146,3 @@ if not TOKEN:
     raise SystemExit("Thieu DISCORD_TOKEN trong env")
 
 bot.run(TOKEN)
-```
