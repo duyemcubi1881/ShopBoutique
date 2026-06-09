@@ -72,13 +72,16 @@ C_SHOP = 0xD4A017
 
 PRODUCTS = {
     "aimlock_pro": {
-        "label": "Aimlock Pro",
-        "emoji": "😈",
+        "label": "AimLock Pro",
+        "emoji": "🎯",
         "tagline": "Ghim Đầu Cực Mạnh · Hỗ Trợ Đầy Đủ",
-        "server": "Aimlock Pro Exe",
+        "server": "AimLock Pro Exe",
         "accent": C_AIMBOT,
         "packages": [
-            {"id": "ap_1m", "name": "Aimlock Pro 1 Tháng", "price": 250_000, "duration": "30 ngày", "days": 30},
+            {"id": "ap_1d", "name": "AimLock Pro 1 Ngày", "price": 15_000, "duration": "1 ngày", "days": 1},
+            {"id": "ap_7d", "name": "AimLock Pro 7 Ngày", "price": 60_000, "duration": "7 ngày", "days": 7},
+            {"id": "ap_1m", "name": "AimLock Pro 1 Tháng", "price": 150_000, "duration": "1 tháng", "days": 30},
+            {"id": "ap_1ob", "name": "AimLock Pro 1 OB", "price": 250_000, "duration": "1 OB", "days": 90},
         ],
     },
 }
@@ -714,24 +717,63 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 def hub_embed() -> discord.Embed:
     e = discord.Embed(
-        title="🛒 ShopClone - Auto Buy",
+        title="AimLock Pro — Auto Buy",
         description=(
             "**🔥 Danh mục đang bán**\n"
-            "===============================================\n"
-            "➡️ 😈 **Aimlock Pro**\n"
-            "💰 **Giá:** `250,000 VNĐ`\n"
-            "📦 **Kho Còn:** `Sẵn Hàng` (Auto Key)\n\n"
-            "**📞 Support**\n"
-            f"✉️ **Tạo Ticket:** {SUPPORT_TEXT}\n"
-            f"👤 **Hỗ trợ:** @admin (hoặc direct message)\n\n"
-            "Vui lòng chọn danh mục bên dưới để tiếp tục"
+            "─────────────────────────────────────────────────"
         ),
         color=C_SHOP,
     )
+    
+    # Column grid for packages
+    e.add_field(
+        name="🎯 AimLock Pro 1 Ngay",
+        value="💰 **Giá:** `15,000 VNĐ`\n⏱️ **Hạn:** `1 ngay`",
+        inline=True
+    )
+    e.add_field(
+        name="🎯 AimLock Pro 7 Ngay",
+        value="💰 **Giá:** `60,000 VNĐ`\n⏱️ **Hạn:** `7 ngay`",
+        inline=True
+    )
+    e.add_field(
+        name="🎯 AimLock Pro 1 Thang",
+        value="💰 **Giá:** `150,000 VNĐ`\n⏱️ **Hạn:** `1 thang`",
+        inline=True
+    )
+    e.add_field(
+        name="🎯 AimLock Pro 1 OB",
+        value="💰 **Giá:** `250,000 VNĐ`\n⏱️ **Hạn:** `1 OB`",
+        inline=True
+    )
+    
+    # Support Section
+    e.add_field(
+        name="📞 Support",
+        value=f"📩 **Tạo Ticket:** {SUPPORT_TEXT}\n👤 **Hỗ trợ:** Admin",
+        inline=False
+    )
+    
+    # Footer directions inside the embed
+    e.add_field(
+        name="​",
+        value=(
+            "Vui lòng chọn danh mục bên dưới để tiếp tục\n\n"
+            "💳 **Thanh toán Tự Động · Nhanh Chóng · Uy Tín | DucDuy Boutique**"
+        ),
+        inline=False
+    )
+
     if SHOP_THUMBNAIL:
         e.set_thumbnail(url=SHOP_THUMBNAIL)
     elif bot.user:
         e.set_thumbnail(url=bot.user.display_avatar.url)
+        
+    if bot.user:
+        e.set_author(
+            name="DucDuy BTQ · AimLock Pro Shop",
+            icon_url=bot.user.display_avatar.url,
+        )
     return e
 
 
@@ -742,7 +784,7 @@ def guide_embed() -> discord.Embed:
             "**Bước 1 — Nạp tiền**\n"
             "Bấm `Nạp tiền` → nhập số VNĐ → quét QR → chuyển **đúng số CK** + mã `NAP...`\n\n"
             "**Bước 2 — Mua license**\n"
-            "Menu `Chọn danh mục...` → Chọn Aimlock Pro → chọn gói → xác nhận\n\n"
+            "Menu `Chọn danh mục...` → Chọn AimLock Pro → chọn gói → xác nhận\n\n"
             "**Bước 3 — Nhận key**\n"
             "Mở DM với bot — key gửi tự động trong vài giây\n\n"
             "══════════════════════\n"
@@ -799,15 +841,15 @@ class LaneSelect(discord.ui.Select):
 
     def __init__(self):
         super().__init__(
-            placeholder="📌  Chọn danh mục...",
+            placeholder="🎯  Chọn danh mục...",
             min_values=1,
             max_values=1,
             options=[
                 discord.SelectOption(
-                    label="Aimlock Pro",
+                    label="AimLock Pro",
                     value="aimlock_pro",
-                    emoji="😈",
-                    description="Aimlock Pro · Ghim đầu · 250.000đ",
+                    emoji="🎯",
+                    description="AimLock Pro · Ghim đầu cực mạnh · từ 15.000đ",
                 ),
             ],
             custom_id="boutique_lane_select",
