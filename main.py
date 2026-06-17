@@ -61,7 +61,7 @@ DEPOSIT_MSG_TTL = int(os.getenv("DEPOSIT_MSG_TTL", "120"))
 MIN_DEPOSIT = int(os.getenv("MIN_DEPOSIT", "5000"))
 USE_UNIQUE_AMOUNT = os.getenv("DEPOSIT_UNIQUE_SUFFIX", "1").lower() not in ("0", "false", "no")
 
-API_AIMBOT_BASE = _clean_env(os.getenv("API_AIMBOT_BASE", "https://aovduy.onrender.com")).rstrip("/")
+API_AIMBOT_BASE = _clean_env(os.getenv("API_AIMBOT_BASE", "https://aovduy-h4bn.onrender.com")).rstrip("/")
 API_ADMIN_USER = _clean_env(os.getenv("API_ADMIN_USER"))
 API_ADMIN_PASS = _clean_env(os.getenv("API_ADMIN_PASS"))
 
