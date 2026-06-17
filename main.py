@@ -1172,6 +1172,9 @@ async def on_ready():
     global _http_started
     log.info("Online: %s | VN %s", bot.user, _vn_now_str())
     bot.add_view(BoutiquePanelView())
+    if not _http_started:
+        await start_http()
+        _http_started = True
     if not poll_sepay.is_running():
         poll_sepay.start()
     if SEPAY_TOKEN and not _sepay_auth_failed:
@@ -1184,15 +1187,7 @@ async def on_ready():
         log.info("API AimLock Backend: %s", API_AIMBOT_BASE)
 
 
-# === SỬA LỖI PORT TIMEOUT TRÊN RENDER ===
-# Chạy web server TRƯỚC để Render thấy cổng mở ngay,
-# sau đó mới khởi động bot Discord.
-async def main():
-    await start_http()          # Webhook server bind cổng ngay
-    async with bot:
-        await bot.start(TOKEN)  # Bot login
-
 if not TOKEN:
-    raise SystemExit("Thiếu DISCORD_TOKEN trong env")
+    raise SystemExit("Thieu DISCORD_TOKEN trong env")
 
-asyncio.run(main())
+bot.run(TOKEN)
