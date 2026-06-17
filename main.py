@@ -81,7 +81,7 @@ PRODUCTS = {
             {"id": "ap_1d", "name": "AimLock Pro 1 Ngày", "price": 15_000, "duration": "1 ngày", "days": 1},
             {"id": "ap_7d", "name": "AimLock Pro 7 Ngày", "price": 60_000, "duration": "7 ngày", "days": 7},
             {"id": "ap_1m", "name": "AimLock Pro 1 Tháng", "price": 150_000, "duration": "1 tháng", "days": 30},
-            {"id": "ap_1ob", "name": "AimLock Pro 1 OB", "price": 250_000, "duration": "1 OB", "days": 90},
+            {"id": "ap_1ob", "name": "AimLock Pro 1 OB", "price": 450_000, "duration": "1 OB", "days": 90},
         ],
     },
 }
@@ -743,7 +743,7 @@ def hub_embed() -> discord.Embed:
     )
     e.add_field(
         name="🎯 AimLock Pro 1 OB",
-        value="💰 **Giá:** `250,000 VNĐ`\n⏱️ **Hạn:** `1 OB`",
+        value="💰 **Giá:** `450,000 VNĐ`\n⏱️ **Hạn:** `1 OB`",
         inline=True
     )
     
