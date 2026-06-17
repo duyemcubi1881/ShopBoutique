@@ -110,7 +110,7 @@ log = logging.getLogger("shop")
 
 DATA_FILE = _ROOT / "data.json"
 API_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=20)
-_api_lock = asyncio.Lock()
+_api_lock: asyncio.Lock | None = None
 
 balances: dict[int, int] = {}
 orders: dict[str, dict] = {}
@@ -206,6 +206,9 @@ def _extract_key(data: dict) -> str | None:
 
 async def api_create_key(product_key: str, pkg: dict, buyer_id: int) -> str | None:
     """Dang nhap admin + POST /api/createkey — tra ve key string."""
+    global _api_lock
+    if _api_lock is None:
+        _api_lock = asyncio.Lock()
     if not API_ADMIN_USER or not API_ADMIN_PASS:
         log.error("Thieu API_ADMIN_USER / API_ADMIN_PASS tren Render")
         return None
